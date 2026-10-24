@@ -21,7 +21,7 @@ Exec=$SCRIPT_DIR/run.sh %f
 Icon=accessories-character-map
 Terminal=false
 Type=Application
-Categories=Office;AudioVideo;Audio;AudioVideoEditing;Accessibility;
+Categories=AudioVideo;Audio;Office;
 MimeType=application/pdf;application/epub+zip;text/plain;text/markdown;
 Keywords=audiobook;tts;voice;reader;joystick;gimnasio;
 EOF
