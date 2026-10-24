@@ -63,3 +63,12 @@ class BookmarkManager:
         books = list(self.library.values())
         books.sort(key=lambda b: b.get("last_read", ""), reverse=True)
         return books[:limit]
+
+    def remove_book(self, file_path: str):
+        """Elimina un libro de la biblioteca."""
+        if not file_path:
+            return
+        abs_path = os.path.abspath(file_path)
+        if abs_path in self.library:
+            del self.library[abs_path]
+            self.save()

@@ -6,7 +6,10 @@ control por joystick inalámbrico en tiempo real y Modo Mini Flotante para gimna
 
 import os
 import sys
+import shutil
+import subprocess
 import threading
+from datetime import datetime
 from tkinter import filedialog
 import customtkinter as ctk
 
@@ -35,6 +38,99 @@ def format_seconds(seconds: float) -> str:
     return f"{m:02d}:{s:02d}"
 
 
+def format_filesize(bytes_size: int) -> str:
+    """Formatea tamaño de archivo en bytes a KB o MB legibles."""
+    if not bytes_size or bytes_size < 1024:
+        return f"{bytes_size or 0} B"
+    kb = bytes_size / 1024.0
+    if kb < 1024:
+        return f"{kb:.1f} KB"
+    mb = kb / 1024.0
+    return f"{mb:.2f} MB"
+
+
+def open_cachyos_file_dialog(start_dir: str = None, directory_only: bool = False) -> str:
+    """
+    Abre el diálogo de archivos nativo de CachyOS (GTK4 / GNOME) usando zenity.
+    Soporta temas oscuros, barra de marcadores del sistema y filtros de extensiones.
+    Si zenity no está instalado o falla, recurre de forma transparente a filedialog de tkinter.
+    """
+    if shutil.which("zenity"):
+        cmd = ["zenity", "--file-selection"]
+        if directory_only:
+            cmd.extend(["--directory", "--title=Seleccionar Carpeta — CachyOS"])
+        else:
+            cmd.extend([
+                "--title=Seleccionar Libro o Documento — CachyOS",
+                "--file-filter=Todos los libros (*.pdf, *.epub, *.txt, *.md) | *.pdf *.epub *.txt *.md *.PDF *.EPUB *.TXT *.MD",
+                "--file-filter=Documentos PDF (*.pdf) | *.pdf *.PDF",
+                "--file-filter=Libros EPUB (*.epub) | *.epub *.EPUB",
+                "--file-filter=Texto Plano y Markdown (*.txt, *.md) | *.txt *.md *.TXT *.MD",
+                "--file-filter=Todos los archivos | *"
+            ])
+
+        if start_dir and os.path.exists(start_dir):
+            if os.path.isdir(start_dir):
+                cmd.append(f"--filename={start_dir.rstrip('/')}/")
+            else:
+                cmd.append(f"--filename={start_dir}")
+
+        try:
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            if res.returncode == 0:
+                selected = res.stdout.strip()
+                if selected and os.path.exists(selected):
+                    return selected
+            elif res.returncode == 1:
+                # El usuario canceló la selección deliberadamente
+                return None
+        except Exception as e:
+            print(f"[CachyOS Dialog] Error ejecutando zenity: {e}")
+
+    # Fallback con filedialog de tkinter
+    if directory_only:
+        return filedialog.askdirectory(
+            initialdir=start_dir or os.path.expanduser("~"),
+            title="Seleccionar Carpeta"
+        )
+    return filedialog.askopenfilename(
+        initialdir=start_dir or os.path.expanduser("~"),
+        title="Seleccionar libro o documento",
+        filetypes=[
+            ("Libros y Documentos", "*.pdf *.epub *.txt *.md"),
+            ("Archivos PDF", "*.pdf"),
+            ("Libros EPUB", "*.epub"),
+            ("Texto Plano y Markdown", "*.txt *.md"),
+            ("Todos los archivos", "*.*")
+        ]
+    )
+
+
+def send_desktop_osd(title: str, subtitle: str = ""):
+    """Envía notificación OSD nativa al escritorio de CachyOS (Wayland / GNOME)."""
+    def _notify():
+        try:
+            if shutil.which("notify-send"):
+                subprocess.run(
+                    [
+                        "notify-send",
+                        "-a", "Lector Libros IA",
+                        "-h", "string:x-canonical-private-synchronous:osd",
+                        "-u", "low",
+                        "-t", "1400",
+                        title,
+                        subtitle or ""
+                    ],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+        except Exception:
+            pass
+
+    threading.Thread(target=_notify, daemon=True).start()
+
+
+
 class LectorLibrosGUI:
     """Ventana principal del lector de libros y documentos con soporte para joystick."""
 
@@ -49,6 +145,7 @@ class LectorLibrosGUI:
         self.document: Document = None
         self.is_mini = False
         self.last_highlighted_para = -1
+        self.osd_timer = None
 
         # Configuración de ventana
         self.root.title("Lector de Libros IA — Modo Entrenamiento")
@@ -82,14 +179,14 @@ class LectorLibrosGUI:
         if self.joystick.is_connected:
             self._on_joystick_connection_change(True, self.joystick.current_device_name)
 
-        # Atajos de teclado para probar o usar sin mando
-        self.root.bind("<space>", lambda e: self.player.toggle_pause())
-        self.root.bind("<Left>", lambda e: self.player.prev_paragraph())
-        self.root.bind("<Right>", lambda e: self.player.next_paragraph())
-        self.root.bind("<Up>", lambda e: self.player.prev_line())
-        self.root.bind("<Down>", lambda e: self.player.next_line())
-        self.root.bind("<plus>", lambda e: self.step_speed(0.1))
-        self.root.bind("<minus>", lambda e: self.step_speed(-0.1))
+        # Atajos de teclado sincronizados con el OSD y joystick
+        self.root.bind("<space>", lambda e: self._handle_joystick_action("PLAY_PAUSE"))
+        self.root.bind("<Left>", lambda e: self._handle_joystick_action("PREV_PARAGRAPH"))
+        self.root.bind("<Right>", lambda e: self._handle_joystick_action("NEXT_PARAGRAPH"))
+        self.root.bind("<Up>", lambda e: self._handle_joystick_action("PREV_LINE"))
+        self.root.bind("<Down>", lambda e: self._handle_joystick_action("NEXT_LINE"))
+        self.root.bind("<plus>", lambda e: self._handle_joystick_action("SPEED_UP"))
+        self.root.bind("<minus>", lambda e: self._handle_joystick_action("SPEED_DOWN"))
 
         # Cargar documento inicial si se proporcionó
         if initial_file and os.path.exists(initial_file):
@@ -238,6 +335,45 @@ class LectorLibrosGUI:
         # Permitir hacer clic en cualquier parte del texto para saltar a ese párrafo
         self.text_box._textbox.bind("<Button-1>", self._on_text_click)
 
+        # Overlay flotante On-Screen Display (OSD) para comandos de joystick/teclado
+        self.osd_frame = ctk.CTkFrame(
+            self.left_panel,
+            corner_radius=18,
+            fg_color="#0f172a",
+            border_width=2,
+            border_color="#38bdf8"
+        )
+        osd_inner = ctk.CTkFrame(self.osd_frame, fg_color="transparent")
+        osd_inner.pack(padx=28, pady=16)
+
+        self.osd_icon_label = ctk.CTkLabel(
+            osd_inner,
+            text="🎮",
+            font=ctk.CTkFont(size=36)
+        )
+        self.osd_icon_label.pack(side="left", padx=(0, 16))
+
+        osd_text_box = ctk.CTkFrame(osd_inner, fg_color="transparent")
+        osd_text_box.pack(side="left")
+
+        self.osd_title_label = ctk.CTkLabel(
+            osd_text_box,
+            text="COMANDO",
+            font=ctk.CTkFont(size=20, weight="bold"),
+            text_color="#38bdf8",
+            anchor="w"
+        )
+        self.osd_title_label.pack(fill="x")
+
+        self.osd_subtitle_label = ctk.CTkLabel(
+            osd_text_box,
+            text="",
+            font=ctk.CTkFont(size=12),
+            text_color="#94a3b8",
+            anchor="w"
+        )
+        self.osd_subtitle_label.pack(fill="x")
+
         # ::: PANEL DERECHO: TARJETAS DE CONTROLES MULTIMEDIA Y JOYSTICK :::
         self.right_panel = ctk.CTkFrame(self.split_frame, fg_color="transparent", width=320)
         self.right_panel.pack(side="right", fill="y", expand=False)
@@ -273,7 +409,7 @@ class LectorLibrosGUI:
             height=38,
             fg_color="#0284c7",
             hover_color="#0369a1",
-            command=self.player.toggle_pause
+            command=lambda: self._handle_joystick_action("PLAY_PAUSE")
         )
         self.btn_play_pause.pack(fill="x", padx=12, pady=(0, 8))
 
@@ -285,7 +421,7 @@ class LectorLibrosGUI:
         self.btn_prev_para = ctk.CTkButton(
             nav_para_frame,
             text="⏮ Párrafo Ant.",
-            command=self.player.prev_paragraph,
+            command=lambda: self._handle_joystick_action("PREV_PARAGRAPH"),
             fg_color="gray30",
             hover_color="gray40"
         )
@@ -294,7 +430,7 @@ class LectorLibrosGUI:
         self.btn_next_para = ctk.CTkButton(
             nav_para_frame,
             text="⏭ Párrafo Sig.",
-            command=self.player.next_paragraph,
+            command=lambda: self._handle_joystick_action("NEXT_PARAGRAPH"),
             fg_color="gray30",
             hover_color="gray40"
         )
@@ -308,7 +444,7 @@ class LectorLibrosGUI:
         self.btn_prev_line = ctk.CTkButton(
             nav_line_frame,
             text="⏪ -5s (Línea)",
-            command=self.player.prev_line,
+            command=lambda: self._handle_joystick_action("PREV_LINE"),
             fg_color="gray25",
             hover_color="gray35"
         )
@@ -317,7 +453,7 @@ class LectorLibrosGUI:
         self.btn_next_line = ctk.CTkButton(
             nav_line_frame,
             text="⏩ +5s (Línea)",
-            command=self.player.next_line,
+            command=lambda: self._handle_joystick_action("NEXT_LINE"),
             fg_color="gray25",
             hover_color="gray35"
         )
@@ -380,39 +516,50 @@ class LectorLibrosGUI:
         # 3. CONTENEDOR MODO MINI (FLOTANTE PARA GIMNASIO)
         self.mini_frame = ctk.CTkFrame(self.root, fg_color="transparent")
 
-        self.btn_mini_prev = ctk.CTkButton(
+        self.lbl_mini_osd = ctk.CTkLabel(
             self.mini_frame,
+            text="🎮 Modo Gimnasio",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color="#38bdf8"
+        )
+        self.lbl_mini_osd.pack(side="top", pady=(4, 2))
+
+        mini_btn_row = ctk.CTkFrame(self.mini_frame, fg_color="transparent")
+        mini_btn_row.pack(side="top", fill="x")
+
+        self.btn_mini_prev = ctk.CTkButton(
+            mini_btn_row,
             text="⏮",
             width=48, height=48, corner_radius=24,
             fg_color="gray25", hover_color="gray35",
             font=ctk.CTkFont(size=18, weight="bold"),
-            command=self.player.prev_paragraph
+            command=lambda: self._handle_joystick_action("PREV_PARAGRAPH")
         )
-        self.btn_mini_prev.pack(side="left", padx=6, pady=10)
+        self.btn_mini_prev.pack(side="left", padx=4, pady=4)
 
         self.btn_mini_play = ctk.CTkButton(
-            self.mini_frame,
+            mini_btn_row,
             text="▶",
             width=56, height=56, corner_radius=28,
             fg_color="#38bdf8", hover_color="#0ea5e9",
             text_color="#0f172a",
             font=ctk.CTkFont(size=24, weight="bold"),
-            command=self.player.toggle_pause
+            command=lambda: self._handle_joystick_action("PLAY_PAUSE")
         )
-        self.btn_mini_play.pack(side="left", padx=8, pady=10)
+        self.btn_mini_play.pack(side="left", padx=6, pady=4)
 
         self.btn_mini_next = ctk.CTkButton(
-            self.mini_frame,
+            mini_btn_row,
             text="⏭",
             width=48, height=48, corner_radius=24,
             fg_color="gray25", hover_color="gray35",
             font=ctk.CTkFont(size=18, weight="bold"),
-            command=self.player.next_paragraph
+            command=lambda: self._handle_joystick_action("NEXT_PARAGRAPH")
         )
-        self.btn_mini_next.pack(side="left", padx=6, pady=10)
+        self.btn_mini_next.pack(side="left", padx=4, pady=4)
 
         self.btn_mini_expand = ctk.CTkButton(
-            self.mini_frame,
+            mini_btn_row,
             text="⤢",
             width=48, height=48, corner_radius=24,
             fg_color="gray25", hover_color="gray35",
@@ -420,7 +567,7 @@ class LectorLibrosGUI:
             font=ctk.CTkFont(size=18, weight="bold"),
             command=self.toggle_mini
         )
-        self.btn_mini_expand.pack(side="left", padx=6, pady=10)
+        self.btn_mini_expand.pack(side="left", padx=4, pady=4)
 
     # --------------------------------------------------------------------------
     # MODO MINI PARA GIMNASIO
@@ -430,12 +577,12 @@ class LectorLibrosGUI:
         self.is_mini = not self.is_mini
         if self.is_mini:
             self.main_frame.pack_forget()
-            self.root.minsize(280, 85)
+            self.root.minsize(300, 112)
             self.root.resizable(False, False)
             self.root.attributes("-topmost", True)  # Siempre visible mientras entrenas
             self.root.update_idletasks()
-            self.root.geometry("280x85")
-            self.mini_frame.pack(expand=True)
+            self.root.geometry("300x112")
+            self.mini_frame.pack(expand=True, fill="both", padx=8, pady=4)
         else:
             self.mini_frame.pack_forget()
             self.root.minsize(780, 500)
@@ -449,17 +596,18 @@ class LectorLibrosGUI:
     # GESTIÓN DE DOCUMENTOS
     # --------------------------------------------------------------------------
     def select_file_dialog(self):
-        """Abre un diálogo de selección de archivo."""
-        path = filedialog.askopenfilename(
-            title="Seleccionar libro o documento",
-            filetypes=[
-                ("Libros y Documentos", "*.pdf *.epub *.txt *.md"),
-                ("Archivos PDF", "*.pdf"),
-                ("Libros EPUB", "*.epub"),
-                ("Texto Plano y Markdown", "*.txt *.md"),
-                ("Todos los archivos", "*.*")
-            ]
-        )
+        """Abre el diálogo de archivos nativo de CachyOS (GTK4/Zenity) para seleccionar un libro."""
+        last_dir = None
+        if self.document and self.document.file_path:
+            last_dir = os.path.dirname(self.document.file_path)
+        elif self.config.get("last_opened_file"):
+            last_dir = os.path.dirname(self.config["last_opened_file"])
+        else:
+            last_dir = os.path.expanduser("~/Descargas")
+            if not os.path.exists(last_dir):
+                last_dir = os.path.expanduser("~/Documentos")
+
+        path = open_cachyos_file_dialog(last_dir)
         if path:
             self.open_document_path(path)
 
@@ -475,6 +623,9 @@ class LectorLibrosGUI:
             # Recordar archivo
             self.config["last_opened_file"] = file_path
             save_config(self.config)
+
+            # Notificar en OSD
+            self.show_osd("LIBRO CARGADO", doc.title[:45], icon="📖", color="#10b981")
 
             # Restaurar punto de lectura si existe en la biblioteca
             prog = self.bookmarks.get_progress(file_path)
@@ -616,47 +767,104 @@ class LectorLibrosGUI:
         self.root.after(0, update_state)
 
     # --------------------------------------------------------------------------
+    # SISTEMA DE NOTIFICACIÓN ON-SCREEN DISPLAY (OSD)
+    # --------------------------------------------------------------------------
+    def show_osd(self, title: str, subtitle: str = "", icon: str = "🎮", color: str = "#38bdf8", duration_ms: int = 1800):
+        """Muestra un banner flotante en pantalla (OSD) con el comando ejecutado."""
+        try:
+            # 1. Configurar y mostrar banner OSD en la ventana principal
+            self.osd_frame.configure(border_color=color)
+            self.osd_icon_label.configure(text=icon)
+            self.osd_title_label.configure(text=title, text_color=color)
+            self.osd_subtitle_label.configure(text=subtitle)
+
+            self.osd_frame.place(relx=0.5, rely=0.30, anchor="center")
+            self.osd_frame.lift()
+
+            # 2. Configurar indicador OSD en Modo Mini si está activo
+            if hasattr(self, "lbl_mini_osd"):
+                self.lbl_mini_osd.configure(text=f"{icon} {title}", text_color=color)
+
+            # 3. Actualizar barra de estado inferior
+            self.status_label.configure(text=f"{icon} {title} — {subtitle}", text_color=color)
+
+            # 4. Programar auto-ocultamiento
+            if self.osd_timer:
+                try:
+                    self.root.after_cancel(self.osd_timer)
+                except Exception:
+                    pass
+            self.osd_timer = self.root.after(duration_ms, self._hide_osd)
+
+            # 5. Notificación OSD nativa en el escritorio CachyOS
+            send_desktop_osd(f"{icon} {title}", subtitle)
+        except Exception as e:
+            print(f"[OSD] Error mostrando banner: {e}")
+
+    def _hide_osd(self):
+        """Oculta el banner flotante OSD."""
+        try:
+            self.osd_frame.place_forget()
+        except Exception:
+            pass
+        if hasattr(self, "lbl_mini_osd"):
+            self.lbl_mini_osd.configure(
+                text="🎮 Modo Gimnasio Activo",
+                text_color="#94a3b8"
+            )
+
+    # --------------------------------------------------------------------------
     # ACCIONES DEL JOYSTICK Y MANDOS INALÁMBRICOS
     # --------------------------------------------------------------------------
     def _handle_joystick_action(self, action: str):
-        """Ejecuta la orden recibida desde el joystick inalámbrico."""
-        # Mensaje flotante de feedback para que el usuario sepa qué tecla activó
-        action_names = {
-            "PLAY_PAUSE": "⏯️ Pausa / Reanudar",
-            "PREV_PARAGRAPH": "⏮️ Párrafo Anterior",
-            "NEXT_PARAGRAPH": "⏭️ Párrafo Siguiente",
-            "PREV_LINE": "⏪ -5s (Línea)",
-            "NEXT_LINE": "⏩ +5s (Línea)",
-            "VOL_UP": "🔊 Volumen +5%",
-            "VOL_DOWN": "🔉 Volumen -5%",
-            "SPEED_UP": "⏩ Velocidad +0.1x",
-            "SPEED_DOWN": "⏪ Velocidad -0.1x",
-            "STOP": "⏹️ Detener",
-        }
-        name = action_names.get(action, action)
-
+        """Ejecuta la orden recibida desde el joystick inalámbrico o teclado con feedback visual OSD."""
         def run_action():
-            self.status_label.configure(text=f"🎮 Joystick: {name}", text_color="#38bdf8")
+            p_idx = self.player.current_paragraph_index
+            tot = self.document.total_paragraphs if self.document else 0
 
             if action == "PLAY_PAUSE":
+                if self.player.is_playing:
+                    self.show_osd("PAUSA", "Lectura pausada", icon="⏸️", color="#f59e0b")
+                else:
+                    self.show_osd("CONTINUAR / LECTURA", f"Párrafo {p_idx + 1} de {tot}", icon="▶️", color="#10b981")
                 self.player.toggle_pause()
+
             elif action == "PREV_PARAGRAPH":
+                prev_idx = max(0, p_idx - 1)
+                self.show_osd("RETROCEDER PÁRRAFO", f"Párrafo {prev_idx + 1} de {tot}", icon="⏮️", color="#38bdf8")
                 self.player.prev_paragraph()
+
             elif action == "NEXT_PARAGRAPH":
+                next_idx = min(tot - 1, p_idx + 1) if tot > 0 else 0
+                self.show_osd("AVANZAR PÁRRAFO", f"Párrafo {next_idx + 1} de {tot}", icon="⏭️", color="#38bdf8")
                 self.player.next_paragraph()
+
             elif action == "PREV_LINE":
+                self.show_osd("RETROCEDER (-5s)", "Rebobinando en el párrafo", icon="⏪", color="#818cf8")
                 self.player.prev_line()
+
             elif action == "NEXT_LINE":
+                self.show_osd("AVANZAR (+5s)", "Adelantando en el párrafo", icon="⏩", color="#818cf8")
                 self.player.next_line()
+
             elif action == "VOL_UP":
                 self.step_volume(5)
+                self.show_osd(f"VOLUMEN: {self.player.volume}%", "Nivel de audio aumentado", icon="🔊", color="#a855f7")
+
             elif action == "VOL_DOWN":
                 self.step_volume(-5)
+                self.show_osd(f"VOLUMEN: {self.player.volume}%", "Nivel de audio reducido", icon="🔉", color="#a855f7")
+
             elif action == "SPEED_UP":
                 self.step_speed(0.1)
+                self.show_osd(f"VELOCIDAD: {self.player.speed:.2f}x", "Ritmo de lectura acelerado", icon="⚡", color="#06b6d4")
+
             elif action == "SPEED_DOWN":
                 self.step_speed(-0.1)
+                self.show_osd(f"VELOCIDAD: {self.player.speed:.2f}x", "Ritmo de lectura más pausado", icon="🐌", color="#06b6d4")
+
             elif action == "STOP":
+                self.show_osd("DETENIDO", "Lectura finalizada", icon="⏹️", color="#ef4444")
                 self.player.stop()
 
         self.root.after(0, run_action)
@@ -674,12 +882,14 @@ class LectorLibrosGUI:
                     text=f"🎮 Mando '{name}' conectado. ¡Listo para entrenar!",
                     text_color="#10b981"
                 )
+                self.show_osd("JOYSTICK CONECTADO", name, icon="🎮", color="#10b981")
             else:
                 self.badge_joystick.configure(
                     text="🎮 Joystick: Desconectado",
                     fg_color="#334155",
                     hover_color="#475569"
                 )
+                self.show_osd("JOYSTICK DESCONECTADO", "Buscando mando...", icon="🎮", color="#f59e0b")
 
         self.root.after(0, update_badge)
 
@@ -731,56 +941,389 @@ class LectorLibrosGUI:
     # MODAL DE BIBLIOTECA
     # --------------------------------------------------------------------------
     def open_library_modal(self):
-        """Muestra la lista de libros recientes con su porcentaje de lectura."""
+        """
+        Explorador y Biblioteca de Libros avanzado estilo CachyOS.
+        Permite navegar libros recientes con progreso, explorar carpetas del sistema
+        (Documentos, Descargas, etc.) y abrir el selector nativo de GNOME/CachyOS.
+        """
         modal = ctk.CTkToplevel(self.root)
-        modal.title("Biblioteca de Libros")
-        modal.geometry("520x420")
+        modal.title("Explorador y Biblioteca de Libros — CachyOS")
+        modal.geometry("820x570")
+        modal.minsize(740, 500)
         modal.transient(self.root)
         modal.grab_set()
 
+        # Recordar la carpeta activa para el explorador
+        default_dir = os.path.expanduser("~/Descargas")
+        if not os.path.exists(default_dir):
+            default_dir = os.path.expanduser("~/Documentos")
+        current_browse_dir = [default_dir]
+
+        # 1. Cabecera superior con títulos y accesos directos
+        header = ctk.CTkFrame(modal, fg_color="transparent")
+        header.pack(fill="x", padx=18, pady=(14, 6))
+
+        title_box = ctk.CTkFrame(header, fg_color="transparent")
+        title_box.pack(side="left")
         ctk.CTkLabel(
-            modal,
-            text="📚 Libros Recientes y Marcadores",
-            font=ctk.CTkFont(size=16, weight="bold")
-        ).pack(pady=12)
+            title_box,
+            text="🗂️ Explorador de Libros",
+            font=ctk.CTkFont(size=18, weight="bold")
+        ).pack(anchor="w")
+        ctk.CTkLabel(
+            title_box,
+            text="Integración con el escritorio CachyOS (GNOME / GTK4)",
+            font=ctk.CTkFont(size=11),
+            text_color="gray70"
+        ).pack(anchor="w")
 
-        scroll = ctk.CTkScrollableFrame(modal, width=480, height=300)
-        scroll.pack(fill="both", expand=True, padx=15, pady=(0, 10))
+        # Botones de acción del sistema
+        header_actions = ctk.CTkFrame(header, fg_color="transparent")
+        header_actions.pack(side="right")
 
-        books = self.bookmarks.get_recent_books(20)
-        if not books:
-            ctk.CTkLabel(scroll, text="No hay libros recientes guardados.", text_color="gray60").pack(pady=30)
+        def open_with_nautilus():
+            dir_to_open = current_browse_dir[0] if os.path.exists(current_browse_dir[0]) else os.path.expanduser("~")
+            subprocess.Popen(["xdg-open", dir_to_open])
 
-        for b in books:
-            card = ctk.CTkFrame(scroll, corner_radius=8)
-            card.pack(fill="x", pady=4, padx=4)
+        btn_nautilus = ctk.CTkButton(
+            header_actions,
+            text="📁 Abrir en Nautilus",
+            width=135,
+            height=32,
+            fg_color="gray25",
+            hover_color="gray35",
+            command=open_with_nautilus
+        )
+        btn_nautilus.pack(side="right", padx=(8, 0))
 
-            title = b.get("title", "Sin título")
-            curr_p = b.get("current_paragraph", 0) + 1
-            tot_p = b.get("total_paragraphs", 1)
-            percent = b.get("progress_percent", 0.0)
-            path = b.get("path", "")
+        def open_native_chooser():
+            path = open_cachyos_file_dialog(current_browse_dir[0])
+            if path:
+                modal.destroy()
+                self.open_document_path(path)
 
-            info = ctk.CTkFrame(card, fg_color="transparent")
-            info.pack(side="left", fill="both", expand=True, padx=8, pady=6)
+        btn_native = ctk.CTkButton(
+            header_actions,
+            text="🗂️ Selector de CachyOS",
+            width=165,
+            height=32,
+            fg_color="#0284c7",
+            hover_color="#0369a1",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            command=open_native_chooser
+        )
+        btn_native.pack(side="right")
 
-            ctk.CTkLabel(info, text=title[:38], font=ctk.CTkFont(size=12, weight="bold"), anchor="w").pack(fill="x")
-            ctk.CTkLabel(
-                info,
-                text=f"Párrafo {curr_p} de {tot_p} ({percent}%)",
-                font=ctk.CTkFont(size=11),
-                text_color="gray70",
-                anchor="w"
-            ).pack(fill="x")
+        # 2. Barra de Búsqueda reactiva
+        search_frame = ctk.CTkFrame(modal, fg_color="transparent")
+        search_frame.pack(fill="x", padx=18, pady=(4, 8))
 
-            btn = ctk.CTkButton(
-                card,
-                text="Reanudar ▶",
-                width=90,
-                height=28,
-                command=lambda p=path, m=modal: (self.open_document_path(p), m.destroy())
+        search_entry = ctk.CTkEntry(
+            search_frame,
+            placeholder_text="🔍 Filtrar libros por nombre, archivo o palabra clave...",
+            height=36,
+            font=ctk.CTkFont(size=13)
+        )
+        search_entry.pack(fill="x")
+
+        # 3. Pestañas: Recientes vs Explorador de Carpetas de CachyOS
+        tabview = ctk.CTkTabview(modal)
+        tabview.pack(fill="both", expand=True, padx=18, pady=(0, 14))
+
+        tab_recents = tabview.add("📚 Mis Libros Recientes")
+        tab_browse = tabview.add("🔎 Explorar Carpetas del Sistema")
+
+        # ======================================================================
+        # PESTAÑA 1: LIBROS RECIENTES Y MARCADORES
+        # ======================================================================
+        scroll_recents = ctk.CTkScrollableFrame(tab_recents)
+        scroll_recents.pack(fill="both", expand=True, padx=4, pady=4)
+
+        def populate_recents(filter_text=""):
+            for child in scroll_recents.winfo_children():
+                child.destroy()
+
+            books = self.bookmarks.get_recent_books(50)
+            if filter_text:
+                q = filter_text.strip().lower()
+                books = [b for b in books if q in b.get("title", "").lower() or q in b.get("path", "").lower()]
+
+            if not books:
+                ctk.CTkLabel(
+                    scroll_recents,
+                    text="No se encontraron libros que coincidan con la búsqueda." if filter_text else "No hay libros recientes guardados.",
+                    text_color="gray60",
+                    font=ctk.CTkFont(size=13)
+                ).pack(pady=40)
+                return
+
+            for b in books:
+                card = ctk.CTkFrame(scroll_recents, corner_radius=8)
+                card.pack(fill="x", pady=4, padx=2)
+
+                path = b.get("path", "")
+                title = b.get("title", os.path.basename(path) if path else "Sin título")
+                curr_p = b.get("current_paragraph", 0) + 1
+                tot_p = b.get("total_paragraphs", 1)
+                percent = b.get("progress_percent", 0.0)
+
+                # Badge de tipo de formato
+                ext = os.path.splitext(path)[1].lower() if path else ""
+                badge_colors = {
+                    '.pdf': ('PDF', '#dc2626'),
+                    '.epub': ('EPUB', '#9333ea'),
+                    '.txt': ('TXT', '#2563eb'),
+                    '.md': ('MD', '#059669')
+                }
+                badge_text, badge_color = badge_colors.get(ext, (ext[1:].upper() or "DOC", '#475569'))
+
+                lbl_badge = ctk.CTkLabel(
+                    card,
+                    text=f" {badge_text} ",
+                    fg_color=badge_color,
+                    corner_radius=4,
+                    font=ctk.CTkFont(size=10, weight="bold"),
+                    text_color="#ffffff"
+                )
+                lbl_badge.pack(side="left", padx=(10, 8), pady=8)
+
+                # Información y barra de progreso
+                info = ctk.CTkFrame(card, fg_color="transparent")
+                info.pack(side="left", fill="both", expand=True, padx=4, pady=6)
+
+                ctk.CTkLabel(
+                    info,
+                    text=title[:55],
+                    font=ctk.CTkFont(size=13, weight="bold"),
+                    anchor="w"
+                ).pack(fill="x")
+
+                prog_frame = ctk.CTkFrame(info, fg_color="transparent")
+                prog_frame.pack(fill="x", pady=(2, 0))
+
+                pbar = ctk.CTkProgressBar(prog_frame, height=6, progress_color="#38bdf8")
+                pbar.set(min(1.0, max(0.0, percent / 100.0)))
+                pbar.pack(side="left", fill="x", expand=True, padx=(0, 10))
+
+                ctk.CTkLabel(
+                    prog_frame,
+                    text=f"{percent}% (Párrafo {curr_p} de {tot_p})",
+                    font=ctk.CTkFont(size=11),
+                    text_color="gray70"
+                ).pack(side="right")
+
+                # Botones de Reanudar y Quitar
+                btn_box = ctk.CTkFrame(card, fg_color="transparent")
+                btn_box.pack(side="right", padx=10, pady=6)
+
+                def do_resume(p=path):
+                    modal.destroy()
+                    self.open_document_path(p)
+
+                btn_read = ctk.CTkButton(
+                    btn_box,
+                    text="Reanudar ▶",
+                    width=95,
+                    height=28,
+                    fg_color="#0284c7",
+                    hover_color="#0369a1",
+                    font=ctk.CTkFont(size=12, weight="bold"),
+                    command=do_resume
+                )
+                btn_read.pack(side="left", padx=(0, 6))
+
+                def do_remove(p=path):
+                    self.bookmarks.remove_book(p)
+                    populate_recents(search_entry.get())
+
+                btn_del = ctk.CTkButton(
+                    btn_box,
+                    text="✕",
+                    width=28,
+                    height=28,
+                    fg_color="gray30",
+                    hover_color="#ef4444",
+                    command=do_remove
+                )
+                btn_del.pack(side="left")
+
+        # ======================================================================
+        # PESTAÑA 2: EXPLORADOR DE CARPETAS DE CACHYOS
+        # ======================================================================
+        folder_bar = ctk.CTkFrame(tab_browse, fg_color="transparent")
+        folder_bar.pack(fill="x", pady=(2, 6))
+
+        lbl_folder_path = ctk.CTkLabel(
+            folder_bar,
+            text=f"📂 Carpeta: {default_dir}",
+            anchor="w",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color="#38bdf8"
+        )
+        lbl_folder_path.pack(side="left", fill="x", expand=True)
+
+        quick_btns = ctk.CTkFrame(folder_bar, fg_color="transparent")
+        quick_btns.pack(side="right")
+
+        scroll_files = ctk.CTkScrollableFrame(tab_browse)
+        scroll_files.pack(fill="both", expand=True, padx=4, pady=4)
+
+        def scan_folder_books(folder: str, max_depth: int = 1):
+            valid_exts = {'.pdf', '.epub', '.txt', '.md'}
+            found = []
+            folder = os.path.abspath(folder)
+            if not os.path.exists(folder):
+                return found
+
+            for root_dir, dirs, files in os.walk(folder):
+                rel = os.path.relpath(root_dir, folder)
+                depth = 0 if rel == '.' else len(rel.split(os.sep))
+                if depth > max_depth:
+                    dirs.clear()
+                    continue
+                # Ignorar carpetas ocultas
+                dirs[:] = [d for d in dirs if not d.startswith('.')]
+
+                for f in files:
+                    ext = os.path.splitext(f)[1].lower()
+                    if ext in valid_exts and not f.startswith('.'):
+                        full_p = os.path.join(root_dir, f)
+                        try:
+                            st = os.stat(full_p)
+                            found.append({
+                                'filename': f,
+                                'path': full_p,
+                                'ext': ext,
+                                'size': st.st_size,
+                                'mtime': st.st_mtime,
+                                'rel_dir': '' if rel == '.' else rel
+                            })
+                        except Exception:
+                            pass
+            return sorted(found, key=lambda x: x['mtime'], reverse=True)
+
+        def populate_folder_files(folder: str, filter_text: str = ""):
+            for child in scroll_files.winfo_children():
+                child.destroy()
+
+            current_browse_dir[0] = folder
+            files = scan_folder_books(folder, max_depth=1)
+
+            if filter_text:
+                q = filter_text.strip().lower()
+                files = [f for f in files if q in f['filename'].lower()]
+
+            folder_display = os.path.basename(folder) or folder
+            lbl_folder_path.configure(
+                text=f"📂 {folder_display} ({len(files)} libros encontrados)"
             )
-            btn.pack(side="right", padx=8, pady=6)
+
+            if not files:
+                ctk.CTkLabel(
+                    scroll_files,
+                    text="No se encontraron libros (.pdf, .epub, .txt, .md) en esta carpeta.",
+                    text_color="gray60",
+                    font=ctk.CTkFont(size=13)
+                ).pack(pady=40)
+                return
+
+            for item in files:
+                card = ctk.CTkFrame(scroll_files, corner_radius=8)
+                card.pack(fill="x", pady=4, padx=2)
+
+                ext = item['ext']
+                badge_colors = {
+                    '.pdf': ('PDF', '#dc2626'),
+                    '.epub': ('EPUB', '#9333ea'),
+                    '.txt': ('TXT', '#2563eb'),
+                    '.md': ('MD', '#059669')
+                }
+                badge_text, badge_color = badge_colors.get(ext, (ext[1:].upper() or "DOC", '#475569'))
+
+                lbl_badge = ctk.CTkLabel(
+                    card,
+                    text=f" {badge_text} ",
+                    fg_color=badge_color,
+                    corner_radius=4,
+                    font=ctk.CTkFont(size=10, weight="bold"),
+                    text_color="#ffffff"
+                )
+                lbl_badge.pack(side="left", padx=(10, 8), pady=8)
+
+                info = ctk.CTkFrame(card, fg_color="transparent")
+                info.pack(side="left", fill="both", expand=True, padx=4, pady=6)
+
+                ctk.CTkLabel(
+                    info,
+                    text=item['filename'][:55],
+                    font=ctk.CTkFont(size=13, weight="bold"),
+                    anchor="w"
+                ).pack(fill="x")
+
+                dt = datetime.fromtimestamp(item['mtime']).strftime('%d/%m/%Y %H:%M')
+                sub_text = f"Tamaño: {format_filesize(item['size'])} • Modificado: {dt}"
+                if item['rel_dir']:
+                    sub_text += f" • Subcarpeta: {item['rel_dir']}"
+
+                ctk.CTkLabel(
+                    info,
+                    text=sub_text,
+                    font=ctk.CTkFont(size=11),
+                    text_color="gray70",
+                    anchor="w"
+                ).pack(fill="x")
+
+                def do_open(p=item['path']):
+                    modal.destroy()
+                    self.open_document_path(p)
+
+                btn_open_book = ctk.CTkButton(
+                    card,
+                    text="📖 Abrir y Leer",
+                    width=110,
+                    height=28,
+                    fg_color="#0284c7",
+                    hover_color="#0369a1",
+                    font=ctk.CTkFont(size=12, weight="bold"),
+                    command=do_open
+                )
+                btn_open_book.pack(side="right", padx=10, pady=6)
+
+        def switch_folder(target_dir):
+            if os.path.exists(target_dir):
+                populate_folder_files(target_dir, search_entry.get())
+
+        def choose_custom_folder():
+            f = open_cachyos_file_dialog(current_browse_dir[0], directory_only=True)
+            if f and os.path.isdir(f):
+                switch_folder(f)
+
+        btn_f_desc = ctk.CTkButton(quick_btns, text="📥 Descargas", width=90, height=26, fg_color="gray25", hover_color="gray35", command=lambda: switch_folder(os.path.expanduser("~/Descargas")))
+        btn_f_desc.pack(side="left", padx=2)
+
+        btn_f_docs = ctk.CTkButton(quick_btns, text="📄 Documentos", width=95, height=26, fg_color="gray25", hover_color="gray35", command=lambda: switch_folder(os.path.expanduser("~/Documentos")))
+        btn_f_docs.pack(side="left", padx=2)
+
+        btn_f_home = ctk.CTkButton(quick_btns, text="🏠 Personal", width=80, height=26, fg_color="gray25", hover_color="gray35", command=lambda: switch_folder(os.path.expanduser("~")))
+        btn_f_home.pack(side="left", padx=2)
+
+        btn_f_custom = ctk.CTkButton(quick_btns, text="📁 Elegir Carpeta...", width=115, height=26, fg_color="gray30", hover_color="gray40", command=choose_custom_folder)
+        btn_f_custom.pack(side="left", padx=2)
+
+        # Conectar buscador en tiempo real
+        def on_search_type(event=None):
+            q = search_entry.get()
+            current_tab = tabview.get()
+            if "Recientes" in current_tab:
+                populate_recents(q)
+            else:
+                populate_folder_files(current_browse_dir[0], q)
+
+        search_entry.bind("<KeyRelease>", on_search_type)
+
+        # Cargar datos iniciales
+        populate_recents()
+        populate_folder_files(default_dir)
 
     # --------------------------------------------------------------------------
     # MODAL DE CONFIGURACIÓN Y PRUEBA DE JOYSTICK
