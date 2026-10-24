@@ -26,17 +26,34 @@ Diseñado para escuchar libros, artículos y documentos mientras realizas activi
      - **Control de Volumen:** D-Pad Arriba / Abajo.
      - **Control de Velocidad:** Ajustable al vuelo.
 
-3. **Marcadores y Memoria de Lectura Automática:**
+3. **On-Screen Display (OSD) y Feedback Visual en Tiempo Real:**
+   - Cada pulsación en el joystick inalámbrico o teclado muestra inmediatamente un banner flotante destacado (OSD) en pantalla con colores distintivos e iconos:
+     - ⏸️ **PAUSA** (Ámbar)
+     - ▶️ **CONTINUAR / REANUDAR** (Verde esmeralda)
+     - ⏮️ **RETROCEDER PÁRRAFO** (Azul cielo)
+     - ⏭️ **AVANZAR PÁRRAFO** (Azul cielo)
+     - ⏪ / ⏩ **RETROCEDER / AVANZAR LÍNEA (5s)** (Índigo)
+     - 🔊 / 🔉 **NIVEL DE VOLUMEN** (Púrpura)
+     - ⚡ **RITMO DE VELOCIDAD** (Cian)
+   - Envía además notificaciones nativas sincronizadas al escritorio Wayland/GNOME de CachyOS (`notify-send`), visible incluso si estás a distancia en el gimnasio o en otro espacio de trabajo.
+
+4. **Explorador de Libros Integrado con CachyOS:**
+   - **Selector Nativo de CachyOS:** Usa el diálogo oficial GTK4/GNOME de CachyOS (`zenity`) con tema oscuro, accesos directos, marcadores de carpetas y filtros.
+   - **Explorador de Libros del Sistema:** Escanea al instante tus carpetas `~/Descargas` y `~/Documentos`, mostrando distintivos de formato (`[PDF]`, `[EPUB]`, `[TXT]`, `[MD]`), tamaño del archivo, fecha de modificación y botón directo *Abrir y Leer*.
+   - **Buscador en Tiempo Real:** Filtra libros por título o nombre de archivo mientras escribes.
+   - **Acceso Directo a Nautilus:** Botón para abrir la carpeta actual directamente en el gestor de archivos de CachyOS.
+
+5. **Marcadores y Memoria de Lectura Automática:**
    - Guarda automáticamente el punto exacto de lectura para cada libro que abras en tu biblioteca (`~/.config/ai-reader/library.json`).
    - Al volver a abrir un libro, se reanuda de inmediato donde lo dejaste.
 
-4. **Síntesis Neuronal con Pre-Carga Continua:**
+6. **Síntesis Neuronal con Pre-Carga Continua:**
    - Voces neuronales de alta fidelidad en español de Edge-TTS (Tomás, Elena, Jorge, Álvaro, Dalia, etc.).
    - **Pre-síntesis asíncrona:** Mientras escuchas el párrafo actual, el siguiente ya se sintetiza en segundo plano para una transición instantánea sin pausas.
    - **Respaldo Offline (Piper TTS):** Si no tienes internet durante el entrenamiento, utiliza automáticamente el modelo local de Piper (`es_ES-sharvard-medium.onnx`).
 
-5. **Modo Mini Flotante (Gimnasio):**
-   - Modo de ventana ultracompacta que se mantiene siempre visible (*Always on Top*) con botones gigantes para consultar el progreso mientras usas otras aplicaciones o cronómetros.
+7. **Modo Mini Flotante (Gimnasio):**
+   - Modo de ventana ultracompacta que se mantiene siempre visible (*Always on Top*) con visor de comandos OSD y botones táctiles gigantes para consultar el progreso mientras entrenas.
 
 ---
 
