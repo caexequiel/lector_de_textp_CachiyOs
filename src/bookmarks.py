@@ -72,3 +72,17 @@ class BookmarkManager:
         if abs_path in self.library:
             del self.library[abs_path]
             self.save()
+
+    def cleanup_missing_books(self) -> int:
+        """Elimina de la biblioteca libros que ya no existen en el disco."""
+        to_delete = [p for p in self.library if not os.path.exists(p)]
+        for p in to_delete:
+            del self.library[p]
+        if to_delete:
+            self.save()
+        return len(to_delete)
+
+    def clear_library(self):
+        """Vacía por completo todos los libros de la biblioteca."""
+        self.library.clear()
+        self.save()

@@ -81,6 +81,42 @@ DEFAULT_JOYSTICK_MAP = {
     "axis_y_pos": "VOL_DOWN",
 }
 
+# Acciones disponibles para asignar a controles
+JOYSTICK_ACTIONS = {
+    "PLAY_PAUSE": "⏯️ Pausar / Reanudar Lectura",
+    "PREV_PARAGRAPH": "⏮️ Párrafo Anterior",
+    "NEXT_PARAGRAPH": "⏭️ Párrafo Siguiente",
+    "PREV_LINE": "⏪ Retroceder Línea (-5s)",
+    "NEXT_LINE": "⏩ Avanzar Línea (+5s)",
+    "VOL_UP": "🔊 Subir Volumen (+5%)",
+    "VOL_DOWN": "🔉 Bajar Volumen (-5%)",
+    "SPEED_UP": "⚡ Aumentar Velocidad (+0.1x)",
+    "SPEED_DOWN": "🐌 Reducir Velocidad (-0.1x)",
+    "STOP": "⏹️ Detener Lectura",
+    "NONE": "❌ Desactivado / Sin Asignar",
+}
+
+# Definiciones de botones y ejes físicos para configuración visual
+JOYSTICK_INPUT_DEFINITIONS = [
+    ("btn_0", "Botón A / Cruz", "Botón frontal inferior"),
+    ("btn_1", "Botón B / Círculo", "Botón frontal derecho"),
+    ("btn_2", "Botón X / Cuadrado", "Botón frontal izquierdo"),
+    ("btn_3", "Botón Y / Triángulo", "Botón frontal superior"),
+    ("btn_4", "LB / L1 (Bumper Izq)", "Botón superior frontal izquierdo"),
+    ("btn_5", "RB / R1 (Bumper Der)", "Botón superior frontal derecho"),
+    ("axis_2_pos", "LT / L2 (Gatillo Izq)", "Gatillo analógico izquierdo"),
+    ("axis_5_pos", "RT / R2 (Gatillo Der)", "Gatillo analógico derecho"),
+    ("axis_7_neg", "D-Pad Arriba ⬆", "Cruceta direccional hacia arriba"),
+    ("axis_7_pos", "D-Pad Abajo ⬇", "Cruceta direccional hacia abajo"),
+    ("axis_6_neg", "D-Pad Izquierda ⬅", "Cruceta direccional hacia la izquierda"),
+    ("axis_6_pos", "D-Pad Derecha ➡", "Cruceta direccional hacia la derecha"),
+    ("btn_7", "Start / Menú", "Botón Start / Opciones"),
+    ("btn_6", "Back / Select / Vista", "Botón Back / Selección"),
+    ("btn_8", "Logo / Home / Mode", "Botón central GameSir"),
+    ("btn_9", "L3 (Click Stick Izq)", "Pulsación física del stick izquierdo"),
+    ("btn_10", "R3 (Click Stick Der)", "Pulsación física del stick derecho"),
+]
+
 
 def load_config():
     """Carga la configuración del usuario con valores por defecto."""

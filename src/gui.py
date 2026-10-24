@@ -21,6 +21,8 @@ from .config import (
     unmute_sink,
     get_sink_volume_and_mute,
     DEFAULT_JOYSTICK_MAP,
+    JOYSTICK_ACTIONS,
+    JOYSTICK_INPUT_DEFINITIONS,
 )
 from .document_parser import DocumentParser, Document
 from .bookmarks import BookmarkManager
@@ -128,6 +130,24 @@ def send_desktop_osd(title: str, subtitle: str = ""):
             pass
 
     threading.Thread(target=_notify, daemon=True).start()
+
+
+def open_in_file_manager(file_path: str):
+    """Abre el explorador de archivos nativo (Nautilus) seleccionando el archivo especificado."""
+    if not file_path:
+        return
+    abs_p = os.path.abspath(file_path)
+    try:
+        if os.path.exists(abs_p):
+            if shutil.which("nautilus"):
+                subprocess.Popen(["nautilus", "--select", abs_p])
+            else:
+                subprocess.Popen(["xdg-open", os.path.dirname(abs_p)])
+        elif os.path.exists(os.path.dirname(abs_p)):
+            subprocess.Popen(["xdg-open", os.path.dirname(abs_p)])
+    except Exception as e:
+        print(f"[FileManager] Error abriendo ubicación: {e}")
+
 
 
 
@@ -948,8 +968,8 @@ class LectorLibrosGUI:
         """
         modal = ctk.CTkToplevel(self.root)
         modal.title("Explorador y Biblioteca de Libros — CachyOS")
-        modal.geometry("820x570")
-        modal.minsize(740, 500)
+        modal.geometry("860x580")
+        modal.minsize(780, 520)
         modal.transient(self.root)
         modal.grab_set()
 
@@ -1034,8 +1054,63 @@ class LectorLibrosGUI:
         tab_browse = tabview.add("🔎 Explorar Carpetas del Sistema")
 
         # ======================================================================
-        # PESTAÑA 1: LIBROS RECIENTES Y MARCADORES
+        # PESTAÑA 1: LIBROS RECIENTES Y MARCADORES (CON GESTIÓN Y UBICACIÓN)
         # ======================================================================
+        # Barra de herramientas de gestión de la biblioteca
+        recents_toolbar = ctk.CTkFrame(tab_recents, fg_color="transparent")
+        recents_toolbar.pack(fill="x", padx=4, pady=(2, 6))
+
+        lbl_lib_count = ctk.CTkLabel(
+            recents_toolbar,
+            text="📚 Cargando...",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color="#38bdf8",
+            anchor="w"
+        )
+        lbl_lib_count.pack(side="left")
+
+        lib_actions = ctk.CTkFrame(recents_toolbar, fg_color="transparent")
+        lib_actions.pack(side="right")
+
+        def do_cleanup_missing():
+            removed = self.bookmarks.cleanup_missing_books()
+            populate_recents(search_entry.get())
+            if removed > 0:
+                self.show_osd("BIBLIOTECA DEPURADA", f"{removed} libros inexistentes eliminados", icon="🧹", color="#38bdf8")
+            else:
+                self.show_osd("BIBLIOTECA AL DÍA", "Todos los libros existen en disco", icon="✅", color="#10b981")
+
+        btn_cleanup = ctk.CTkButton(
+            lib_actions,
+            text="🧹 Limpiar Inexistentes",
+            width=150,
+            height=28,
+            fg_color="gray25",
+            hover_color="gray35",
+            font=ctk.CTkFont(size=11),
+            command=do_cleanup_missing
+        )
+        btn_cleanup.pack(side="left", padx=(0, 6))
+
+        def do_clear_all():
+            if not self.bookmarks.library:
+                return
+            self.bookmarks.clear_library()
+            populate_recents()
+            self.show_osd("BIBLIOTECA VACIADA", "Todos los marcadores fueron eliminados", icon="🗑️", color="#ef4444")
+
+        btn_clear = ctk.CTkButton(
+            lib_actions,
+            text="🗑️ Vaciar Todo",
+            width=100,
+            height=28,
+            fg_color="#7f1d1d",
+            hover_color="#991b1b",
+            font=ctk.CTkFont(size=11),
+            command=do_clear_all
+        )
+        btn_clear.pack(side="left")
+
         scroll_recents = ctk.CTkScrollableFrame(tab_recents)
         scroll_recents.pack(fill="both", expand=True, padx=4, pady=4)
 
@@ -1048,10 +1123,12 @@ class LectorLibrosGUI:
                 q = filter_text.strip().lower()
                 books = [b for b in books if q in b.get("title", "").lower() or q in b.get("path", "").lower()]
 
+            lbl_lib_count.configure(text=f"📚 {len(books)} libro(s) en tu biblioteca")
+
             if not books:
                 ctk.CTkLabel(
                     scroll_recents,
-                    text="No se encontraron libros que coincidan con la búsqueda." if filter_text else "No hay libros recientes guardados.",
+                    text="No se encontraron libros que coincidan con la búsqueda." if filter_text else "No hay libros recientes guardados en la biblioteca.",
                     text_color="gray60",
                     font=ctk.CTkFont(size=13)
                 ).pack(pady=40)
@@ -1066,6 +1143,7 @@ class LectorLibrosGUI:
                 curr_p = b.get("current_paragraph", 0) + 1
                 tot_p = b.get("total_paragraphs", 1)
                 percent = b.get("progress_percent", 0.0)
+                file_exists = os.path.exists(path) if path else False
 
                 # Badge de tipo de formato
                 ext = os.path.splitext(path)[1].lower() if path else ""
@@ -1087,19 +1165,42 @@ class LectorLibrosGUI:
                 )
                 lbl_badge.pack(side="left", padx=(10, 8), pady=8)
 
-                # Información y barra de progreso
+                # Información central
                 info = ctk.CTkFrame(card, fg_color="transparent")
                 info.pack(side="left", fill="both", expand=True, padx=4, pady=6)
 
                 ctk.CTkLabel(
                     info,
-                    text=title[:55],
+                    text=title[:52],
                     font=ctk.CTkFont(size=13, weight="bold"),
                     anchor="w"
                 ).pack(fill="x")
 
+                # Ubicación y estado del archivo
+                details_frame = ctk.CTkFrame(info, fg_color="transparent")
+                details_frame.pack(fill="x", pady=(1, 2))
+
+                if file_exists:
+                    folder_path = os.path.dirname(path)
+                    ctk.CTkLabel(
+                        details_frame,
+                        text=f"📁 {folder_path[:60]}",
+                        font=ctk.CTkFont(size=11),
+                        text_color="gray70",
+                        anchor="w"
+                    ).pack(side="left")
+                else:
+                    ctk.CTkLabel(
+                        details_frame,
+                        text="⚠️ Archivo no encontrado en disco",
+                        font=ctk.CTkFont(size=11),
+                        text_color="#ef4444",
+                        anchor="w"
+                    ).pack(side="left")
+
+                # Progreso
                 prog_frame = ctk.CTkFrame(info, fg_color="transparent")
-                prog_frame.pack(fill="x", pady=(2, 0))
+                prog_frame.pack(fill="x", pady=(1, 0))
 
                 pbar = ctk.CTkProgressBar(prog_frame, height=6, progress_color="#38bdf8")
                 pbar.set(min(1.0, max(0.0, percent / 100.0)))
@@ -1112,7 +1213,7 @@ class LectorLibrosGUI:
                     text_color="gray70"
                 ).pack(side="right")
 
-                # Botones de Reanudar y Quitar
+                # Botonera de acciones (Reanudar, Ubicación en Nautilus, Quitar de biblioteca)
                 btn_box = ctk.CTkFrame(card, fg_color="transparent")
                 btn_box.pack(side="right", padx=10, pady=6)
 
@@ -1123,27 +1224,43 @@ class LectorLibrosGUI:
                 btn_read = ctk.CTkButton(
                     btn_box,
                     text="Reanudar ▶",
-                    width=95,
+                    width=90,
                     height=28,
-                    fg_color="#0284c7",
+                    fg_color="#0284c7" if file_exists else "gray30",
+                    state="normal" if file_exists else "disabled",
                     hover_color="#0369a1",
                     font=ctk.CTkFont(size=12, weight="bold"),
                     command=do_resume
                 )
-                btn_read.pack(side="left", padx=(0, 6))
+                btn_read.pack(side="left", padx=(0, 4))
 
-                def do_remove(p=path):
+                btn_locate = ctk.CTkButton(
+                    btn_box,
+                    text="📁 Carpeta",
+                    width=80,
+                    height=28,
+                    fg_color="gray25",
+                    hover_color="gray35",
+                    font=ctk.CTkFont(size=11),
+                    command=lambda p=path: open_in_file_manager(p)
+                )
+                btn_locate.pack(side="left", padx=(0, 4))
+
+                def do_remove(p=path, t=title):
                     self.bookmarks.remove_book(p)
                     populate_recents(search_entry.get())
+                    self.show_osd("LIBRO ELIMINADO", t[:35], icon="🗑️", color="#ef4444")
 
                 btn_del = ctk.CTkButton(
                     btn_box,
-                    text="✕",
-                    width=28,
+                    text="🗑️ Quitar",
+                    width=75,
                     height=28,
-                    fg_color="gray30",
-                    hover_color="#ef4444",
-                    command=do_remove
+                    fg_color="gray25",
+                    hover_color="#dc2626",
+                    text_color="#f87171",
+                    font=ctk.CTkFont(size=11),
+                    command=lambda p=path, t=title: do_remove(p, t)
                 )
                 btn_del.pack(side="left")
 
@@ -1329,36 +1446,53 @@ class LectorLibrosGUI:
     # MODAL DE CONFIGURACIÓN Y PRUEBA DE JOYSTICK
     # --------------------------------------------------------------------------
     def open_joystick_modal(self):
-        """Ventana de diagnóstico y remapeo de botones para cualquier mando inalámbrico."""
+        """
+        Ventana de personalización y remapeo interactivo de controles para cualquier mando o joystick.
+        Permite asignar libremente cualquier botón, cruceta o gatillo a subir volumen, pausa, saltos, etc.
+        """
         modal = ctk.CTkToplevel(self.root)
-        modal.title("Configuración de Joystick / Mando")
-        modal.geometry("540x500")
+        modal.title("Personalización de Controles — GameSir / Joystick")
+        modal.geometry("740x650")
+        modal.minsize(680, 560)
         modal.transient(self.root)
         modal.grab_set()
 
-        ctk.CTkLabel(
-            modal,
-            text="🎮 Probador y Configuración de Joystick",
-            font=ctk.CTkFont(size=16, weight="bold")
-        ).pack(pady=(12, 4))
+        # Cabecera
+        header = ctk.CTkFrame(modal, fg_color="transparent")
+        header.pack(fill="x", padx=18, pady=(12, 6))
 
-        dev_status = f"Dispositivo actual: {self.joystick.current_device_name}"
+        title_box = ctk.CTkFrame(header, fg_color="transparent")
+        title_box.pack(side="left")
+
+        ctk.CTkLabel(
+            title_box,
+            text="🎮 Configurar Controles de Joystick / Mando",
+            font=ctk.CTkFont(size=18, weight="bold")
+        ).pack(anchor="w")
+        ctk.CTkLabel(
+            title_box,
+            text="Personaliza cualquier tecla para volumen, pausa, navegación de párrafos y velocidad.",
+            font=ctk.CTkFont(size=11),
+            text_color="gray70"
+        ).pack(anchor="w")
+
+        # Barra de estado del dispositivo y re-escaneo
+        dev_bar = ctk.CTkFrame(modal, fg_color="transparent")
+        dev_bar.pack(fill="x", padx=18, pady=(2, 6))
+
+        dev_status = f"Dispositivo detectado: {self.joystick.current_device_name}"
         lbl_dev = ctk.CTkLabel(
-            modal,
+            dev_bar,
             text=dev_status,
             text_color="#10b981" if self.joystick.is_connected else "#e2e8f0",
-            font=ctk.CTkFont(size=12, weight="bold")
+            font=ctk.CTkFont(size=12, weight="bold"),
+            anchor="w"
         )
-        lbl_dev.pack(pady=(0, 6))
-
-        # Barra de re-escaneo
-        scan_bar = ctk.CTkFrame(modal, fg_color="transparent")
-        scan_bar.pack(fill="x", padx=16, pady=(0, 10))
+        lbl_dev.pack(side="left")
 
         def refresh_devices():
             pads = self.joystick.list_available_gamepads()
             if pads:
-                names = [f"{p[1]} ({p[0]})" for p in pads]
                 lbl_dev.configure(
                     text=f"Detectado: {self.joystick.current_device_name}",
                     text_color="#10b981"
@@ -1371,89 +1505,264 @@ class LectorLibrosGUI:
                 lbl_dev.configure(text="No se detectó ningún mando conectado.", text_color="#C25450")
 
         btn_rescan = ctk.CTkButton(
-            scan_bar,
-            text="🔄 Re-escanear Mandos",
-            width=160,
+            dev_bar,
+            text="🔄 Re-escanear",
+            width=120,
+            height=28,
             command=refresh_devices,
-            fg_color="gray30",
-            hover_color="gray40"
+            fg_color="gray25",
+            hover_color="gray35",
+            font=ctk.CTkFont(size=11)
         )
-        btn_rescan.pack(side="top")
+        btn_rescan.pack(side="right")
 
-        # Cuadro de prueba en vivo
-        test_box = ctk.CTkFrame(modal, corner_radius=8, fg_color="#1e293b")
-        test_box.pack(fill="x", padx=16, pady=(0, 12), ipady=6)
+        # Mensaje de estado de guardado
+        lbl_feedback = ctk.CTkLabel(
+            modal,
+            text="💡 Elige la acción deseada para cada tecla. Los cambios se guardan y aplican al instante.",
+            font=ctk.CTkFont(size=11, slant="italic"),
+            text_color="#38bdf8"
+        )
+        lbl_feedback.pack(padx=18, pady=(0, 6), anchor="w")
 
-        ctk.CTkLabel(test_box, text="Presiona cualquier botón o cruceta de tu mando para probarlo:", text_color="gray70", font=ctk.CTkFont(size=11)).pack(pady=(4, 2))
-        lbl_last_btn = ctk.CTkLabel(test_box, text="[ Esperando pulsación... ]", font=ctk.CTkFont(size=14, weight="bold"), text_color="#10b981")
-        lbl_last_btn.pack(pady=4)
+        # Diccionarios de conversión para la UI
+        action_display_list = list(JOYSTICK_ACTIONS.values())
+        action_name_to_key = {v: k for k, v in JOYSTICK_ACTIONS.items()}
+        dropdown_widgets = {}
 
-        # Conectar callback temporal de prueba
-        def on_raw(dev_name, ev_type, num, val):
-            btn_names_map = {
-                0: "A / Cruz", 1: "B / Círculo", 2: "X / Cuadrado", 3: "Y / Triángulo",
-                4: "LB / L1", 5: "RB / R1", 6: "Back / Select", 7: "Start", 8: "Logo / Home"
+        # Pestañas: Asignación Visual vs Probador en Vivo
+        tabview = ctk.CTkTabview(modal)
+        tabview.pack(fill="both", expand=True, padx=18, pady=(0, 10))
+
+        tab_mapping = tabview.add("🎛️ Asignación de Controles")
+        tab_tester = tabview.add("🎯 Probador y Mapeo Rápido en Vivo")
+
+        # ======================================================================
+        # PESTAÑA 1: ASIGNACIÓN DE CONTROLES (TABLA VISUAL)
+        # ======================================================================
+        scroll_map = ctk.CTkScrollableFrame(tab_mapping)
+        scroll_map.pack(fill="both", expand=True, padx=4, pady=4)
+
+        def on_mapping_changed(choice, key_id, input_label):
+            action_key = action_name_to_key.get(choice, "NONE")
+            if action_key == "NONE":
+                if key_id in self.joystick.action_map:
+                    del self.joystick.action_map[key_id]
+            else:
+                self.joystick.action_map[key_id] = action_key
+
+            # Persistir en la configuración
+            self.config["joystick_map"] = dict(self.joystick.action_map)
+            save_config(self.config)
+
+            lbl_feedback.configure(
+                text=f"✅ Guardado: {input_label} ➔ {choice}",
+                text_color="#10b981"
+            )
+            self.show_osd("CONTROL GUARDADO", f"{input_label} ➔ {choice}", icon="🎮", color="#10b981")
+
+        for key_id, input_label, desc in JOYSTICK_INPUT_DEFINITIONS:
+            row = ctk.CTkFrame(scroll_map, corner_radius=6)
+            row.pack(fill="x", pady=3, padx=2)
+
+            info_box = ctk.CTkFrame(row, fg_color="transparent")
+            info_box.pack(side="left", fill="both", expand=True, padx=10, pady=6)
+
+            ctk.CTkLabel(
+                info_box,
+                text=input_label,
+                font=ctk.CTkFont(size=12, weight="bold"),
+                anchor="w"
+            ).pack(fill="x")
+
+            ctk.CTkLabel(
+                info_box,
+                text=f"{desc}  ({key_id})",
+                font=ctk.CTkFont(size=10),
+                text_color="gray70",
+                anchor="w"
+            ).pack(fill="x")
+
+            # Determinar acción actual
+            current_act_key = self.joystick.action_map.get(key_id, "NONE")
+            current_disp_name = JOYSTICK_ACTIONS.get(current_act_key, "❌ Desactivado / Sin Asignar")
+
+            opt_menu = ctk.CTkOptionMenu(
+                row,
+                values=action_display_list,
+                width=250,
+                height=28,
+                command=lambda c, k=key_id, l=input_label: on_mapping_changed(c, k, l)
+            )
+            opt_menu.set(current_disp_name)
+            opt_menu.pack(side="right", padx=10, pady=6)
+            dropdown_widgets[key_id] = opt_menu
+
+        # ======================================================================
+        # PESTAÑA 2: DETECCIÓN Y MAPEO RÁPIDO EN VIVO
+        # ======================================================================
+        ctk.CTkLabel(
+            tab_tester,
+            text="Presiona cualquier botón o mueve la cruceta de tu joystick para detectarlo automáticamente:",
+            font=ctk.CTkFont(size=12),
+            text_color="gray80"
+        ).pack(pady=(8, 8))
+
+        live_card = ctk.CTkFrame(tab_tester, corner_radius=10, fg_color="#1e293b")
+        live_card.pack(fill="x", padx=8, pady=(0, 10), ipady=8)
+
+        lbl_detected_input = ctk.CTkLabel(
+            live_card,
+            text="[ Esperando pulsación en el mando... ]",
+            font=ctk.CTkFont(size=15, weight="bold"),
+            text_color="#38bdf8"
+        )
+        lbl_detected_input.pack(pady=(6, 4))
+
+        quick_assign_frame = ctk.CTkFrame(live_card, fg_color="transparent")
+        quick_assign_frame.pack(fill="x", padx=16, pady=(4, 6))
+
+        ctk.CTkLabel(
+            quick_assign_frame,
+            text="Asignar acción a esta tecla:",
+            font=ctk.CTkFont(size=12, weight="bold")
+        ).pack(side="left", padx=(0, 8))
+
+        last_detected_info = [None, None]  # [key_id, display_label]
+
+        def on_quick_action_selected(choice):
+            if not last_detected_info[0]:
+                return
+            key_id, input_label = last_detected_info
+            on_mapping_changed(choice, key_id, input_label)
+
+            # Sincronizar el dropdown de la Pestaña 1
+            if key_id in dropdown_widgets:
+                dropdown_widgets[key_id].set(choice)
+
+        opt_live_action = ctk.CTkOptionMenu(
+            quick_assign_frame,
+            values=action_display_list,
+            width=260,
+            height=30,
+            command=on_quick_action_selected
+        )
+        opt_live_action.set("Selecciona una acción...")
+        opt_live_action.configure(state="disabled")
+        opt_live_action.pack(side="left")
+
+        # Registro de eventos sin procesar (para diagnóstico)
+        ctk.CTkLabel(
+            tab_tester,
+            text="Historial de eventos del mando en tiempo real:",
+            font=ctk.CTkFont(size=11),
+            text_color="gray70"
+        ).pack(anchor="w", padx=8, pady=(6, 2))
+
+        txt_log = ctk.CTkTextbox(tab_tester, height=130, font=ctk.CTkFont(family="monospace", size=11))
+        txt_log.pack(fill="both", expand=True, padx=8, pady=(0, 6))
+        txt_log.insert("end", "Inicia la pulsación de teclas para verificar la lectura del kernel...\n")
+        txt_log.configure(state="disabled")
+
+        def on_raw_joystick_event(dev_name, ev_type, num, val):
+            btn_names = {
+                0: "Botón A / Cruz", 1: "Botón B / Círculo", 2: "Botón X / Cuadrado", 3: "Botón Y / Triángulo",
+                4: "LB / L1", 5: "RB / R1", 6: "Back / Select", 7: "Start", 8: "Logo / Home",
+                9: "L3 (Stick Izq)", 10: "R3 (Stick Der)"
             }
+
+            key_id = None
+            display_name = None
+
             if ev_type == "button" and val == 1:
                 key_id = f"btn_{num}"
-                mapped = self.joystick.action_map.get(key_id, "Sin asignar")
-                b_name = btn_names_map.get(num, f"Botón {num}")
-                lbl_last_btn.configure(text=f"🟢 {b_name} ({key_id}) ➜ Acción: {mapped}")
+                display_name = btn_names.get(num, f"Botón {num}")
             elif ev_type == "axis" and abs(val) > 16000:
                 direction = "neg" if val < 0 else "pos"
-                axis_key = f"axis_{num}_{direction}"
-                mapped = self.joystick.action_map.get(axis_key)
-                if not mapped:
-                    axis_name = "axis_x" if num in (0, 6) else ("axis_y" if num in (1, 7) else f"axis_{num}")
-                    axis_key = f"{axis_name}_{direction}"
-                    mapped = self.joystick.action_map.get(axis_key, "Sin asignar")
-
-                axis_desc = {
-                    "axis_6_neg": "D-Pad Izquierda", "axis_6_pos": "D-Pad Derecha",
-                    "axis_7_neg": "D-Pad Arriba", "axis_7_pos": "D-Pad Abajo",
+                key_id = f"axis_{num}_{direction}"
+                axis_names = {
+                    "axis_6_neg": "D-Pad Izquierda ⬅", "axis_6_pos": "D-Pad Derecha ➡",
+                    "axis_7_neg": "D-Pad Arriba ⬆", "axis_7_pos": "D-Pad Abajo ⬇",
                     "axis_0_neg": "Stick Izq ⬅", "axis_0_pos": "Stick Izq ➡",
                     "axis_1_neg": "Stick Izq ⬆", "axis_1_pos": "Stick Izq ⬇",
                     "axis_2_pos": "Gatillo LT / L2", "axis_5_pos": "Gatillo RT / R2",
-                }.get(f"axis_{num}_{direction}", axis_key)
+                }
+                display_name = axis_names.get(key_id, f"Eje {num} ({direction})")
 
-                lbl_last_btn.configure(text=f"🎯 {axis_desc} ({axis_key}) ➜ Acción: {mapped}")
+            if key_id and display_name:
+                last_detected_info[0] = key_id
+                last_detected_info[1] = display_name
 
-        self.joystick.on_raw_event = on_raw
+                curr_act_key = self.joystick.action_map.get(key_id, "NONE")
+                curr_disp_name = JOYSTICK_ACTIONS.get(curr_act_key, "❌ Desactivado / Sin Asignar")
 
-        # Guía de controles recomendada
-        guide_frame = ctk.CTkScrollableFrame(modal, width=500, height=200)
-        guide_frame.pack(fill="both", expand=True, padx=16, pady=(0, 10))
+                def update_live_ui():
+                    lbl_detected_input.configure(
+                        text=f"🟢 Detectado: {display_name}  ({key_id})",
+                        text_color="#10b981"
+                    )
+                    opt_live_action.configure(state="normal")
+                    opt_live_action.set(curr_disp_name)
 
-        guide_data = [
-            ("A / Cruz / Start (Botón 0 / 7)", "Pausar y Reanudar la lectura"),
-            ("D-Pad Izquierda o LB/L1 (Eje 6- / Botón 4)", "Retroceder un párrafo completo"),
-            ("D-Pad Derecha o RB/R1 (Eje 6+ / Botón 5)", "Avanzar un párrafo completo"),
-            ("X / Cuadrado o LT/L2 (Botón 2 / Eje 2+)", "Retroceder una línea / 5 segundos"),
-            ("Y / Triángulo o RT/R2 (Botón 3 / Eje 5+)", "Avanzar una línea / 5 segundos"),
-            ("D-Pad Arriba (Eje 7-)", "Subir volumen (+5%)"),
-            ("D-Pad Abajo (Eje 7+)", "Bajar volumen (-5%)"),
-            ("Back / Select (Botón 6)", "Reducir velocidad (-0.1x)"),
-            ("B / Círculo (Botón 1)", "Detener lectura"),
-        ]
+                    # Log en caja de texto
+                    txt_log.configure(state="normal")
+                    txt_log.insert("end", f"[{datetime.now().strftime('%H:%M:%S')}] {display_name} ({key_id}) ➜ {curr_disp_name}\n")
+                    txt_log.see("end")
+                    txt_log.configure(state="disabled")
 
-        for key_desc, act_desc in guide_data:
-            row = ctk.CTkFrame(guide_frame, fg_color="transparent")
-            row.pack(fill="x", pady=2)
-            ctk.CTkLabel(row, text=f"• {key_desc}:", font=ctk.CTkFont(size=12, weight="bold"), anchor="w").pack(side="left")
-            ctk.CTkLabel(row, text=act_desc, font=ctk.CTkFont(size=12), text_color="#38bdf8", anchor="w").pack(side="right")
+                modal.after(0, update_live_ui)
 
-        # Botón Restaurar valores por defecto
+        self.joystick.on_raw_event = on_raw_joystick_event
+
+        # ======================================================================
+        # BARRA INFERIOR (RESTAURAR POR DEFECTO / CERRAR)
+        # ======================================================================
+        bottom_bar = ctk.CTkFrame(modal, fg_color="transparent")
+        bottom_bar.pack(fill="x", padx=18, pady=(0, 14))
+
+        def restore_defaults():
+            self.joystick.action_map = dict(DEFAULT_JOYSTICK_MAP)
+            self.config["joystick_map"] = dict(DEFAULT_JOYSTICK_MAP)
+            save_config(self.config)
+
+            # Actualizar todos los dropdowns
+            for k, opt in dropdown_widgets.items():
+                act_k = DEFAULT_JOYSTICK_MAP.get(k, "NONE")
+                disp = JOYSTICK_ACTIONS.get(act_k, "❌ Desactivado / Sin Asignar")
+                opt.set(disp)
+
+            lbl_feedback.configure(
+                text="✅ Controles restaurados a la configuración predeterminada de fábrica.",
+                text_color="#10b981"
+            )
+            self.show_osd("CONTROLES RESTAURADOS", "Configuración de fábrica", icon="🎮", color="#10b981")
+
         btn_reset = ctk.CTkButton(
-            modal,
-            text="Restaurar Controles por Defecto",
-            width=200,
-            command=lambda: (self.joystick.action_map.update(DEFAULT_JOYSTICK_MAP), lbl_last_btn.configure(text="Controles restaurados"))
+            bottom_bar,
+            text="🔄 Restaurar Valores por Defecto",
+            width=210,
+            height=32,
+            fg_color="gray25",
+            hover_color="gray35",
+            command=restore_defaults
         )
-        btn_reset.pack(pady=(0, 12))
+        btn_reset.pack(side="left")
 
         def on_modal_close():
             self.joystick.on_raw_event = None
             modal.destroy()
+
+        btn_close = ctk.CTkButton(
+            bottom_bar,
+            text="✅ Guardar y Cerrar",
+            width=140,
+            height=32,
+            fg_color="#0284c7",
+            hover_color="#0369a1",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            command=on_modal_close
+        )
+        btn_close.pack(side="right")
 
         modal.protocol("WM_DELETE_WINDOW", on_modal_close)
 

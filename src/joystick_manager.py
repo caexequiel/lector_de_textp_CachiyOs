@@ -234,13 +234,14 @@ class JoystickManager:
                         if curr_state != prev_state and curr_state != 0 and direction:
                             # Disparar con clave específica del eje (ej: axis_6_neg para D-pad izquierda)
                             specific_key = f"axis_{number}_{direction}"
-                            self._trigger_mapped_action(specific_key)
-
-                            # Y también con claves semánticas (axis_x / axis_y)
-                            if number in (0, 6):  # Eje horizontal (Stick izq o D-Pad Hat)
-                                self._trigger_mapped_action(f"axis_x_{direction}")
-                            elif number in (1, 7):  # Eje vertical (Stick izq o D-Pad Hat)
-                                self._trigger_mapped_action(f"axis_y_{direction}")
+                            if specific_key in self.action_map:
+                                self._trigger_mapped_action(specific_key)
+                            else:
+                                # Claves semánticas genéricas (axis_x / axis_y) de fallback
+                                if number in (0, 6):  # Eje horizontal (Stick izq o D-Pad Hat)
+                                    self._trigger_mapped_action(f"axis_x_{direction}")
+                                elif number in (1, 7):  # Eje vertical (Stick izq o D-Pad Hat)
+                                    self._trigger_mapped_action(f"axis_y_{direction}")
 
                         self.last_axis_states[number] = curr_state
 
