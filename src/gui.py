@@ -78,6 +78,10 @@ class LectorLibrosGUI:
         # Construir UI
         self.build_ui()
 
+        # Si el joystick ya se detectó, actualizar badge de inmediato
+        if self.joystick.is_connected:
+            self._on_joystick_connection_change(True, self.joystick.current_device_name)
+
         # Atajos de teclado para probar o usar sin mando
         self.root.bind("<space>", lambda e: self.player.toggle_pause())
         self.root.bind("<Left>", lambda e: self.player.prev_paragraph())
@@ -795,45 +799,97 @@ class LectorLibrosGUI:
             font=ctk.CTkFont(size=16, weight="bold")
         ).pack(pady=(12, 4))
 
-        dev_status = f"Dispositivo detectado: {self.joystick.current_device_name}"
-        lbl_dev = ctk.CTkLabel(modal, text=dev_status, text_color="#38bdf8", font=ctk.CTkFont(size=12, weight="bold"))
-        lbl_dev.pack(pady=(0, 10))
+        dev_status = f"Dispositivo actual: {self.joystick.current_device_name}"
+        lbl_dev = ctk.CTkLabel(
+            modal,
+            text=dev_status,
+            text_color="#10b981" if self.joystick.is_connected else "#e2e8f0",
+            font=ctk.CTkFont(size=12, weight="bold")
+        )
+        lbl_dev.pack(pady=(0, 6))
+
+        # Barra de re-escaneo
+        scan_bar = ctk.CTkFrame(modal, fg_color="transparent")
+        scan_bar.pack(fill="x", padx=16, pady=(0, 10))
+
+        def refresh_devices():
+            pads = self.joystick.list_available_gamepads()
+            if pads:
+                names = [f"{p[1]} ({p[0]})" for p in pads]
+                lbl_dev.configure(
+                    text=f"Detectado: {self.joystick.current_device_name}",
+                    text_color="#10b981"
+                )
+                self.badge_joystick.configure(
+                    text=f"🎮 {self.joystick.current_device_name[:14]}",
+                    fg_color="#065f46"
+                )
+            else:
+                lbl_dev.configure(text="No se detectó ningún mando conectado.", text_color="#C25450")
+
+        btn_rescan = ctk.CTkButton(
+            scan_bar,
+            text="🔄 Re-escanear Mandos",
+            width=160,
+            command=refresh_devices,
+            fg_color="gray30",
+            hover_color="gray40"
+        )
+        btn_rescan.pack(side="top")
 
         # Cuadro de prueba en vivo
         test_box = ctk.CTkFrame(modal, corner_radius=8, fg_color="#1e293b")
         test_box.pack(fill="x", padx=16, pady=(0, 12), ipady=6)
 
-        ctk.CTkLabel(test_box, text="Presiona cualquier tecla de tu joystick para probarla:", text_color="gray70", font=ctk.CTkFont(size=11)).pack(pady=(4, 2))
+        ctk.CTkLabel(test_box, text="Presiona cualquier botón o cruceta de tu mando para probarlo:", text_color="gray70", font=ctk.CTkFont(size=11)).pack(pady=(4, 2))
         lbl_last_btn = ctk.CTkLabel(test_box, text="[ Esperando pulsación... ]", font=ctk.CTkFont(size=14, weight="bold"), text_color="#10b981")
         lbl_last_btn.pack(pady=4)
 
         # Conectar callback temporal de prueba
         def on_raw(dev_name, ev_type, num, val):
+            btn_names_map = {
+                0: "A / Cruz", 1: "B / Círculo", 2: "X / Cuadrado", 3: "Y / Triángulo",
+                4: "LB / L1", 5: "RB / R1", 6: "Back / Select", 7: "Start", 8: "Logo / Home"
+            }
             if ev_type == "button" and val == 1:
                 key_id = f"btn_{num}"
                 mapped = self.joystick.action_map.get(key_id, "Sin asignar")
-                lbl_last_btn.configure(text=f"Botón {num} ({key_id}) ➜ Acción: {mapped}")
-            elif ev_type == "axis" and abs(val) > 18000:
+                b_name = btn_names_map.get(num, f"Botón {num}")
+                lbl_last_btn.configure(text=f"🟢 {b_name} ({key_id}) ➜ Acción: {mapped}")
+            elif ev_type == "axis" and abs(val) > 16000:
                 direction = "neg" if val < 0 else "pos"
-                axis_name = "axis_x" if num in (0, 6) else ("axis_y" if num in (1, 7) else f"axis_{num}")
-                axis_key = f"{axis_name}_{direction}"
-                mapped = self.joystick.action_map.get(axis_key, "Sin asignar")
-                lbl_last_btn.configure(text=f"Cruceta/Eje {axis_key} ➜ Acción: {mapped}")
+                axis_key = f"axis_{num}_{direction}"
+                mapped = self.joystick.action_map.get(axis_key)
+                if not mapped:
+                    axis_name = "axis_x" if num in (0, 6) else ("axis_y" if num in (1, 7) else f"axis_{num}")
+                    axis_key = f"{axis_name}_{direction}"
+                    mapped = self.joystick.action_map.get(axis_key, "Sin asignar")
+
+                axis_desc = {
+                    "axis_6_neg": "D-Pad Izquierda", "axis_6_pos": "D-Pad Derecha",
+                    "axis_7_neg": "D-Pad Arriba", "axis_7_pos": "D-Pad Abajo",
+                    "axis_0_neg": "Stick Izq ⬅", "axis_0_pos": "Stick Izq ➡",
+                    "axis_1_neg": "Stick Izq ⬆", "axis_1_pos": "Stick Izq ⬇",
+                    "axis_2_pos": "Gatillo LT / L2", "axis_5_pos": "Gatillo RT / R2",
+                }.get(f"axis_{num}_{direction}", axis_key)
+
+                lbl_last_btn.configure(text=f"🎯 {axis_desc} ({axis_key}) ➜ Acción: {mapped}")
 
         self.joystick.on_raw_event = on_raw
 
         # Guía de controles recomendada
-        guide_frame = ctk.CTkScrollableFrame(modal, width=500, height=220)
-        guide_frame.pack(fill="both", expand=True, padx=16, pady=(0, 12))
+        guide_frame = ctk.CTkScrollableFrame(modal, width=500, height=200)
+        guide_frame.pack(fill="both", expand=True, padx=16, pady=(0, 10))
 
         guide_data = [
-            ("A / Cruz / Start (Botón 0 / 7 / 9)", "Pausa y Reanudación de lectura"),
-            ("D-Pad Izquierda / L1 (Eje X- / Botón 4)", "Retroceder un párrafo completo"),
-            ("D-Pad Derecha / R1 (Eje X+ / Botón 5)", "Avanzar un párrafo completo"),
-            ("X / Cuadrado (Botón 2)", "Retroceder una línea / 5 segundos"),
-            ("Y / Triángulo (Botón 3)", "Avanzar una línea / 5 segundos"),
-            ("D-Pad Arriba (Eje Y-)", "Subir volumen"),
-            ("D-Pad Abajo (Eje Y+)", "Bajar volumen"),
+            ("A / Cruz / Start (Botón 0 / 7)", "Pausar y Reanudar la lectura"),
+            ("D-Pad Izquierda o LB/L1 (Eje 6- / Botón 4)", "Retroceder un párrafo completo"),
+            ("D-Pad Derecha o RB/R1 (Eje 6+ / Botón 5)", "Avanzar un párrafo completo"),
+            ("X / Cuadrado o LT/L2 (Botón 2 / Eje 2+)", "Retroceder una línea / 5 segundos"),
+            ("Y / Triángulo o RT/R2 (Botón 3 / Eje 5+)", "Avanzar una línea / 5 segundos"),
+            ("D-Pad Arriba (Eje 7-)", "Subir volumen (+5%)"),
+            ("D-Pad Abajo (Eje 7+)", "Bajar volumen (-5%)"),
+            ("Back / Select (Botón 6)", "Reducir velocidad (-0.1x)"),
             ("B / Círculo (Botón 1)", "Detener lectura"),
         ]
 

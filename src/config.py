@@ -48,21 +48,37 @@ DEFAULT_JOYSTICK_MAP = {
     "btn_3": "NEXT_LINE",        # Y / Triángulo (Avanzar línea / 5s)
 
     # Bumpers y Triggers (L1, R1, L2, R2)
-    "btn_4": "PREV_PARAGRAPH",   # L1 (Retroceder párrafo)
-    "btn_5": "NEXT_PARAGRAPH",   # R1 (Avanzar párrafo)
-    "btn_6": "SPEED_DOWN",       # L2 / Select
-    "btn_7": "SPEED_UP",         # R2 / Start
-    "btn_8": "PLAY_PAUSE",       # Select / Back
-    "btn_9": "PLAY_PAUSE",       # Start
-    "btn_10": "PLAY_PAUSE",      # Botón central / Mode
-    "btn_11": "PLAY_PAUSE",      # L3 (Stick izq)
-    "btn_12": "PLAY_PAUSE",      # R3 (Stick der)
+    "btn_4": "PREV_PARAGRAPH",   # LB / L1 (Retroceder párrafo)
+    "btn_5": "NEXT_PARAGRAPH",   # RB / R1 (Avanzar párrafo)
+    "btn_6": "SPEED_DOWN",       # Back / Select (Reducir velocidad)
+    "btn_7": "PLAY_PAUSE",       # Start (Pausa / Reanudar)
+    "btn_8": "PLAY_PAUSE",       # Botón central / Logo GameSir / Mode
+    "btn_9": "PREV_PARAGRAPH",   # L3 (Stick izq)
+    "btn_10": "NEXT_PARAGRAPH",  # R3 (Stick der)
+    "btn_11": "PLAY_PAUSE",
+    "btn_12": "PLAY_PAUSE",
 
-    # D-Pad / Cruceta (ejes o botones según el mando)
-    "axis_x_neg": "PREV_PARAGRAPH", # D-Pad Izquierda
-    "axis_x_pos": "NEXT_PARAGRAPH", # D-Pad Derecha
-    "axis_y_neg": "VOL_UP",         # D-Pad Arriba (o Stick Arriba)
-    "axis_y_pos": "VOL_DOWN",       # D-Pad Abajo (o Stick Abajo)
+    # Cruceta D-Pad (Hat / Ejes 6 y 7 en GameSir / Xbox)
+    "axis_6_neg": "PREV_PARAGRAPH", # D-Pad Izquierda
+    "axis_6_pos": "NEXT_PARAGRAPH", # D-Pad Derecha
+    "axis_7_neg": "VOL_UP",         # D-Pad Arriba
+    "axis_7_pos": "VOL_DOWN",       # D-Pad Abajo
+
+    # Stick Analógico Izquierdo (Ejes 0 y 1)
+    "axis_0_neg": "PREV_PARAGRAPH", # Stick Izquierdo Izquierda
+    "axis_0_pos": "NEXT_PARAGRAPH", # Stick Izquierdo Derecha
+    "axis_1_neg": "VOL_UP",         # Stick Izquierdo Arriba
+    "axis_1_pos": "VOL_DOWN",       # Stick Izquierdo Abajo
+
+    # Gatillos Analógicos LT / RT (Ejes 2 y 5)
+    "axis_2_pos": "PREV_LINE",      # LT / L2 (Retroceder 5s)
+    "axis_5_pos": "NEXT_LINE",      # RT / R2 (Avanzar 5s)
+
+    # Ejes genéricos (fallback)
+    "axis_x_neg": "PREV_PARAGRAPH",
+    "axis_x_pos": "NEXT_PARAGRAPH",
+    "axis_y_neg": "VOL_UP",
+    "axis_y_pos": "VOL_DOWN",
 }
 
 
