@@ -15,6 +15,20 @@ from datetime import datetime
 from tkinter import filedialog
 import customtkinter as ctk
 
+try:
+    import tkinterdnd2
+    class DragDropCTk(ctk.CTk, tkinterdnd2.TkinterDnD.DnDWrapper):
+        """Ventana principal CTk compatible con arrastrar y soltar archivos (Drag & Drop)."""
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.TkdndVersion = tkinterdnd2.TkinterDnD._require(self)
+    DND_AVAILABLE = True
+except Exception:
+    class DragDropCTk(ctk.CTk):
+        pass
+    tkinterdnd2 = None
+    DND_AVAILABLE = False
+
 from .config import (
     VOICES,
     load_config,
@@ -216,6 +230,9 @@ class LectorLibrosGUI:
         # Construir UI
         self.build_ui()
 
+        # Configurar Drag and Drop para arrastrar documentos (.pdf, .epub, .txt, .md)
+        self._setup_drag_and_drop()
+
         # Si el joystick ya se detectó, actualizar badge de inmediato
         if self.joystick.is_connected:
             self._on_joystick_connection_change(True, self.joystick.current_device_name)
@@ -246,15 +263,18 @@ class LectorLibrosGUI:
             welcome_text = (
                 "¡Bienvenido a tu Lector de Libros IA!\n\n"
                 "Para comenzar a escuchar mientras haces gimnasia:\n"
-                "1. Haz clic en '📂 Abrir Libro' para cargar cualquier archivo PDF, EPUB o TXT.\n"
-                "2. Conecta tu joystick o mando inalámbrico (Bluetooth o USB).\n"
-                "3. ¡Usa las teclas del joystick para reproducir, pausar y retroceder párrafos o líneas con total comodidad!\n\n"
+                "1. Arrastra cualquier archivo PDF, EPUB, TXT o MD directamente a esta ventana para leerlo de inmediato.\n"
+                "2. O haz clic en '📂 Abrir Libro' para elegir un documento con el explorador nativo.\n"
+                "3. Conecta tu joystick o mando inalámbrico (Bluetooth o dongle USB).\n"
+                "4. ¡Usa las teclas del joystick para pausar, retroceder párrafos o resaltar texto con total libertad!\n\n"
                 "Controles del Joystick por defecto:\n"
                 "• [A / Cruz / Start]: Pausar y Reanudar la lectura.\n"
-                "• [D-Pad Izquierda / L1]: Retroceder un párrafo completo.\n"
-                "• [D-Pad Derecha / R1]: Avanzar un párrafo completo.\n"
-                "• [X / Cuadrado]: Retroceder una línea / 5 segundos.\n"
-                "• [Y / Triángulo]: Avanzar una línea / 5 segundos.\n"
+                "• [LB / L1]: Resaltar texto en amarillo mientras lee (pulsar de nuevo para guardar).\n"
+                "• [RB / R1]: Borrar o deshacer el último resaltado.\n"
+                "• [D-Pad Izquierda / Stick Izq]: Retroceder un párrafo completo.\n"
+                "• [D-Pad Derecha / Stick Der]: Avanzar un párrafo completo.\n"
+                "• [LT / L2]: Retroceder 5 segundos en el párrafo.\n"
+                "• [RT / R2]: Avanzar 5 segundos en el párrafo.\n"
                 "• [D-Pad Arriba / Abajo]: Subir o Bajar volumen."
             )
             doc = DocumentParser.from_text(welcome_text, "Guía de Inicio")
@@ -350,7 +370,7 @@ class LectorLibrosGUI:
 
         self.doc_name_label = ctk.CTkLabel(
             doc_info_bar,
-            text="Documento no cargado",
+            text="📥 Arrastra un libro aquí (.pdf, .epub, .txt, .md) o ábrelo",
             font=ctk.CTkFont(size=13, weight="bold"),
             text_color="#38bdf8"
         )
@@ -661,6 +681,99 @@ class LectorLibrosGUI:
             self.root.update_idletasks()
             self.root.geometry("960x620")
             self.main_frame.pack(fill="both", expand=True, padx=15, pady=12)
+
+    # --------------------------------------------------------------------------
+    # SOPORTE DE ARRASTRAR Y SOLTAR DOCUMENTOS (DRAG & DROP)
+    # --------------------------------------------------------------------------
+    def _setup_drag_and_drop(self):
+        """Configura el receptor de arrastrar y soltar (Drag and Drop) para documentos."""
+        if not getattr(self.root, "TkdndVersion", None):
+            return
+
+        try:
+            widgets = [
+                self.root,
+                self.main_frame,
+                self.left_panel,
+                self.text_box,
+                self.text_box._textbox,
+                self.mini_frame,
+            ]
+            for w in widgets:
+                try:
+                    w.drop_target_register(tkinterdnd2.DND_FILES)
+                    w.dnd_bind("<<Drop>>", self._on_file_dropped)
+                    w.dnd_bind("<<DropEnter>>", self._on_dnd_enter)
+                    w.dnd_bind("<<DropLeave>>", self._on_dnd_leave)
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"[DnD] Error configurando drag-and-drop: {e}")
+
+    def _on_dnd_enter(self, event):
+        """Muestra una indicación visual cuando se arrastra un archivo sobre la aplicación."""
+        if hasattr(self, "status_label"):
+            self.status_label.configure(
+                text="📥 ¡Suelta aquí tu libro (.pdf, .epub, .txt, .md) para leerlo de inmediato!",
+                text_color="#38bdf8"
+            )
+        if hasattr(self, "lbl_mini_osd") and self.is_mini:
+            self.lbl_mini_osd.configure(
+                text="📥 Suelta para leer",
+                text_color="#38bdf8"
+            )
+
+    def _on_dnd_leave(self, event):
+        """Restaura el estado al salir del área de soltado."""
+        if hasattr(self, "status_label"):
+            if self.player.is_playing:
+                self.status_label.configure(text="▶️ Leyendo...", text_color="#57A868")
+            elif self.player.is_paused:
+                self.status_label.configure(text="⏸️ En pausa", text_color="#E5B567")
+            else:
+                self.status_label.configure(text="Listo para entrenar", text_color="gray70")
+
+    def _on_file_dropped(self, event):
+        """Maneja el evento de soltar un documento arrastrado desde el explorador."""
+        self._on_dnd_leave(event)
+        raw_data = getattr(event, "data", "")
+        if not raw_data:
+            return
+
+        import urllib.parse
+        try:
+            items = self.root.tk.splitlist(raw_data)
+        except Exception:
+            items = [raw_data]
+
+        valid_exts = {".pdf", ".epub", ".txt", ".md"}
+        selected_file = None
+
+        for item in items:
+            clean_item = item.strip("{}").strip()
+            if clean_item.startswith("file://"):
+                clean_item = urllib.parse.unquote(urllib.parse.urlparse(clean_item).path)
+            clean_item = os.path.abspath(clean_item)
+
+            if os.path.isfile(clean_item):
+                ext = os.path.splitext(clean_item)[1].lower()
+                if ext in valid_exts:
+                    selected_file = clean_item
+                    break
+
+        if not selected_file:
+            self.show_osd("FORMATO NO VÁLIDO", "Arrastra archivos PDF, EPUB, TXT o MD", icon="⚠️", color="#f59e0b")
+            return
+
+        # 1. Cargar el documento
+        self.open_document_path(selected_file)
+
+        # 2. Iniciar la reproducción automáticamente desde el párrafo activo
+        if self.document and self.document.total_paragraphs > 0:
+            start_p = self.player.current_paragraph_index
+            self.player.play(start_p)
+            doc_title = self.document.title or os.path.basename(selected_file)
+            self.show_osd("DOCUMENTO CARGADO", f"Leyendo: {doc_title[:32]}...", icon="📖", color="#10b981")
 
     # --------------------------------------------------------------------------
     # GESTIÓN DE DOCUMENTOS

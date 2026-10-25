@@ -13,7 +13,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
-from src.gui import LectorLibrosGUI
+from src.gui import LectorLibrosGUI, DragDropCTk
 
 
 def main():
@@ -49,8 +49,8 @@ def main():
         except Exception:
             pass
 
-    # Arrancar la aplicación gráfica
-    root = ctk.CTk(className="LectorLibrosIA")
+    # Arrancar la aplicación gráfica compatible con Drag & Drop
+    root = DragDropCTk(className="LectorLibrosIA")
     app = LectorLibrosGUI(root, initial_file=initial_file, initial_text=initial_text)
     root.mainloop()
 
