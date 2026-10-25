@@ -198,17 +198,24 @@ class LectorLibrosGUI:
         self.root.attributes("-topmost", False)
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
-        # Configurar icono de la aplicación (alumno.png)
-        icon_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "alumno.png")
-        if not os.path.exists(icon_path):
-            icon_path = "/home/exequiel/Descargas/Íconos/alumno.png"
-        if os.path.exists(icon_path):
-            try:
-                import tkinter as tk
-                self._app_icon = tk.PhotoImage(file=icon_path)
-                self.root.iconphoto(True, self._app_icon)
-            except Exception as e:
-                print(f"[Icon] Error configurando icono: {e}")
+        # Configurar icono de la aplicación (todos los tamaños para GNOME Alt+Tab / _NET_WM_ICON)
+        try:
+            import tkinter as tk
+            icons_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "icons")
+            icon_photos = []
+            for sz in [16, 24, 32, 48, 64, 128, 256]:
+                p = os.path.join(icons_dir, f"icon_{sz}.png")
+                if os.path.exists(p):
+                    icon_photos.append(tk.PhotoImage(file=p))
+            if not icon_photos:
+                main_ico = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "alumno.png")
+                if os.path.exists(main_ico):
+                    icon_photos.append(tk.PhotoImage(file=main_ico))
+            if icon_photos:
+                self.root.iconphoto(True, *icon_photos)
+                self._app_icons_ref = icon_photos
+        except Exception as e:
+            print(f"[Icon] Error configurando icono: {e}")
 
         ctk.set_appearance_mode("Dark")
         ctk.set_default_color_theme("blue")
@@ -256,6 +263,8 @@ class LectorLibrosGUI:
         elif initial_text:
             doc = DocumentParser.from_text(initial_text, "Texto Seleccionado")
             self.set_document(doc)
+            self.player.play(0)
+            self.show_osd("LEYENDO SELECCIÓN", "Texto capturado de pantalla", icon="🎙️", color="#10b981")
         elif self.config.get("last_opened_file") and os.path.exists(self.config["last_opened_file"]):
             self.open_document_path(self.config["last_opened_file"])
         else:

@@ -50,7 +50,7 @@ def main():
             pass
 
     # Arrancar la aplicación gráfica compatible con Drag & Drop
-    root = DragDropCTk(className="LectorLibrosIA")
+    root = DragDropCTk(className="lector-libros-ia")
     app = LectorLibrosGUI(root, initial_file=initial_file, initial_text=initial_text)
     root.mainloop()
 
