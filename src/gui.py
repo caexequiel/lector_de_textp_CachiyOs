@@ -184,6 +184,18 @@ class LectorLibrosGUI:
         self.root.attributes("-topmost", False)
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
+        # Configurar icono de la aplicación (alumno.png)
+        icon_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "alumno.png")
+        if not os.path.exists(icon_path):
+            icon_path = "/home/exequiel/Descargas/Íconos/alumno.png"
+        if os.path.exists(icon_path):
+            try:
+                import tkinter as tk
+                self._app_icon = tk.PhotoImage(file=icon_path)
+                self.root.iconphoto(True, self._app_icon)
+            except Exception as e:
+                print(f"[Icon] Error configurando icono: {e}")
+
         ctk.set_appearance_mode("Dark")
         ctk.set_default_color_theme("blue")
 

@@ -50,7 +50,7 @@ def main():
             pass
 
     # Arrancar la aplicación gráfica
-    root = ctk.CTk()
+    root = ctk.CTk(className="LectorLibrosIA")
     app = LectorLibrosGUI(root, initial_file=initial_file, initial_text=initial_text)
     root.mainloop()
 
