@@ -9,6 +9,8 @@ import sys
 import shutil
 import subprocess
 import threading
+import uuid
+from typing import Optional
 from datetime import datetime
 from tkinter import filedialog
 import customtkinter as ctk
@@ -167,6 +169,13 @@ class LectorLibrosGUI:
         self.last_highlighted_para = -1
         self.osd_timer = None
 
+        # Estado de resaltado interactivo en tiempo real (LB / RB)
+        self.is_highlighting_active = False
+        self.highlight_start_para = 0
+        self.highlight_start_char = 0
+        self.highlight_start_tk_idx = None
+        self.last_speech_pos = (0, 0)
+
         # Configuración de ventana
         self.root.title("Lector de Libros IA — Modo Entrenamiento")
         self.root.geometry("960x620")
@@ -207,6 +216,10 @@ class LectorLibrosGUI:
         self.root.bind("<Down>", lambda e: self._handle_joystick_action("NEXT_LINE"))
         self.root.bind("<plus>", lambda e: self._handle_joystick_action("SPEED_UP"))
         self.root.bind("<minus>", lambda e: self._handle_joystick_action("SPEED_DOWN"))
+        self.root.bind("<h>", lambda e: self._handle_joystick_action("TOGGLE_HIGHLIGHT"))
+        self.root.bind("<H>", lambda e: self._handle_joystick_action("TOGGLE_HIGHLIGHT"))
+        self.root.bind("<BackSpace>", lambda e: self._handle_joystick_action("DELETE_LAST_HIGHLIGHT"))
+        self.root.bind("<Control-z>", lambda e: self._handle_joystick_action("DELETE_LAST_HIGHLIGHT"))
 
         # Cargar documento inicial si se proporcionó
         if initial_file and os.path.exists(initial_file):
@@ -276,6 +289,18 @@ class LectorLibrosGUI:
             font=ctk.CTkFont(size=12, weight="bold")
         )
         self.badge_joystick.pack(side="right", padx=(6, 0))
+
+        # Botón Resaltados
+        self.btn_highlights_list = ctk.CTkButton(
+            header_bar,
+            text="🖍️ Resaltados (0)",
+            width=130,
+            command=self.open_highlights_modal,
+            fg_color="#854d0e",
+            hover_color="#a16207",
+            font=ctk.CTkFont(size=12, weight="bold")
+        )
+        self.btn_highlights_list.pack(side="right", padx=(6, 0))
 
         # Botón Biblioteca
         self.btn_library = ctk.CTkButton(
@@ -350,6 +375,19 @@ class LectorLibrosGUI:
             "read_progress",
             background="#0284c7",
             foreground="#ffffff"
+        )
+        # Resaltado permanente guardado (amarillo clarito)
+        self.text_box._textbox.tag_config(
+            "permanent_highlight",
+            background="#fef08a",
+            foreground="#0f172a"
+        )
+        # Resaltado activo en curso mientras se lee con joystick LB (amarillo brillante)
+        self.text_box._textbox.tag_config(
+            "active_highlighting",
+            background="#fde047",
+            foreground="#000000",
+            underline=True
         )
 
         # Permitir hacer clic en cualquier parte del texto para saltar a ese párrafo
@@ -661,6 +699,13 @@ class LectorLibrosGUI:
         except Exception as e:
             self.status_label.configure(text=f"Error cargando archivo: {e}", text_color="#C25450")
 
+    @property
+    def current_file(self) -> Optional[str]:
+        """Devuelve la ruta absoluta del documento abierto actualmente."""
+        if self.document and self.document.file_path:
+            return self.document.file_path
+        return None
+
     def set_document(self, document: Document):
         """Asigna un nuevo documento al visor y reproductor."""
         self.document = document
@@ -684,7 +729,10 @@ class LectorLibrosGUI:
             tb.tag_add(f"para_{i}", start_idx, end_idx)
 
         tb.configure(state="disabled")
+        self.is_highlighting_active = False
+        self.highlight_start_tk_idx = None
         self._highlight_paragraph(0)
+        self._refresh_permanent_highlights()
 
     def _highlight_paragraph(self, index: int):
         """Resalta visualmente el párrafo activo y hace scroll automático."""
@@ -700,6 +748,9 @@ class LectorLibrosGUI:
         if ranges:
             tb.tag_add("active_paragraph", ranges[0], ranges[1])
             tb.see(ranges[0])
+            # Mantener los resaltados en amarillo encima del fondo del párrafo
+            tb.tag_raise("permanent_highlight")
+            tb.tag_raise("active_highlighting")
 
         self.last_highlighted_para = index
         self.para_count_label.configure(
@@ -749,14 +800,23 @@ class LectorLibrosGUI:
             tb = self.text_box._textbox
             tag_name = f"para_{para_idx}"
             ranges = tb.tag_ranges(tag_name)
-            if ranges and percent > 0:
-                start_p = ranges[0]
+            if ranges:
                 total_len = len(self.document.get_paragraph(para_idx))
-                curr_chars = int(total_len * (percent / 100.0))
+                curr_chars = int(total_len * (percent / 100.0)) if percent > 0 else 0
+                self.last_speech_pos = (para_idx, curr_chars)
+
                 if curr_chars > 0:
+                    start_p = ranges[0]
                     prog_end = f"{start_p} + {curr_chars} chars"
                     tb.tag_remove("read_progress", start_p, ranges[1])
                     tb.tag_add("read_progress", start_p, prog_end)
+
+                    # Si el usuario activó pintar con joystick (LB), extender el trazo en amarillo
+                    if self.is_highlighting_active and self.highlight_start_tk_idx:
+                        tb.tag_remove("active_highlighting", "1.0", "end")
+                        tb.tag_add("active_highlighting", self.highlight_start_tk_idx, prog_end)
+                        tb.tag_raise("permanent_highlight")
+                        tb.tag_raise("active_highlighting")
 
         self.root.after(0, update_ui)
 
@@ -887,6 +947,12 @@ class LectorLibrosGUI:
                 self.show_osd("DETENIDO", "Lectura finalizada", icon="⏹️", color="#ef4444")
                 self.player.stop()
 
+            elif action == "TOGGLE_HIGHLIGHT":
+                self.toggle_highlight()
+
+            elif action == "DELETE_LAST_HIGHLIGHT":
+                self.delete_last_highlight()
+
         self.root.after(0, run_action)
 
     def _on_joystick_connection_change(self, connected: bool, name: str):
@@ -956,6 +1022,411 @@ class LectorLibrosGUI:
             subprocess.run(["wpctl", "set-default", sink_id])
             unmute_sink(sink_id)
             self.status_label.configure(text=f"Salida: {sink_name[:24]}...", text_color="#57A868")
+
+    # --------------------------------------------------------------------------
+    # GESTOR DE RESALTADOS (LB / RB / AMARILLO CLARITO)
+    # --------------------------------------------------------------------------
+    def _update_highlights_badge(self):
+        """Actualiza el contador del botón de resaltados en la barra superior."""
+        if not hasattr(self, "btn_highlights_list"):
+            return
+        count = len(self.bookmarks.get_highlights(self.current_file)) if self.current_file else 0
+        self.btn_highlights_list.configure(text=f"🖍️ Resaltados ({count})")
+
+    def toggle_highlight(self):
+        """
+        Alterna el resaltado interactivo en tiempo real con el botón LB / L1 del mando.
+        - Primera pulsación: Inicia la pintura del texto en amarillo a medida que la voz avanza.
+        - Segunda pulsación: Detiene la pintura, almacena el fragmento y lo muestra en amarillo clarito.
+        """
+        if not self.document:
+            self.show_osd("SIN DOCUMENTO", "Abre un libro antes de resaltar texto", icon="⚠️", color="#f59e0b")
+            return
+
+        tb = self.text_box._textbox
+        curr_p = self.player.current_paragraph_index
+
+        if not self.is_highlighting_active:
+            # INICIAR RESALTADO
+            self.is_highlighting_active = True
+            last_p, last_c = self.last_speech_pos
+            start_char = last_c if last_p == curr_p else 0
+
+            self.highlight_start_para = curr_p
+            self.highlight_start_char = start_char
+
+            ranges = tb.tag_ranges(f"para_{curr_p}")
+            if ranges:
+                self.highlight_start_tk_idx = f"{ranges[0]} + {start_char} chars"
+            else:
+                self.highlight_start_tk_idx = "1.0"
+
+            tb.tag_remove("active_highlighting", "1.0", "end")
+            tb.tag_add("active_highlighting", self.highlight_start_tk_idx, f"{self.highlight_start_tk_idx} + 1 chars")
+            tb.tag_raise("permanent_highlight")
+            tb.tag_raise("active_highlighting")
+
+            self.show_osd("🖍️ RESALTANDO TEXTO", "Leyendo y pintando... (Pulsa LB para finalizar)", icon="🖍️", color="#eab308", duration_ms=2500)
+        else:
+            # FINALIZAR Y GUARDAR RESALTADO
+            self.is_highlighting_active = False
+            last_p, last_c = self.last_speech_pos
+
+            if last_p == curr_p:
+                end_char = last_c
+            else:
+                end_char = len(self.document.get_paragraph(curr_p)) if self.document else 0
+
+            ranges = tb.tag_ranges(f"para_{curr_p}")
+            if ranges:
+                end_tk_idx = f"{ranges[0]} + {end_char} chars"
+            else:
+                end_tk_idx = f"{self.highlight_start_tk_idx} + 1 chars"
+
+            if self.highlight_start_tk_idx and tb.compare(self.highlight_start_tk_idx, ">=", end_tk_idx):
+                end_tk_idx = f"{self.highlight_start_tk_idx} + 1 chars"
+
+            raw_text = tb.get(self.highlight_start_tk_idx, end_tk_idx).strip() if self.highlight_start_tk_idx else ""
+            tb.tag_remove("active_highlighting", "1.0", "end")
+            self.highlight_start_tk_idx = None
+
+            if not raw_text:
+                self.show_osd("RESALTADO VACÍO", "No se capturó texto para resaltar", icon="⚠️", color="#f59e0b")
+                return
+
+            highlight_record = {
+                "id": uuid.uuid4().hex[:8],
+                "start_para": self.highlight_start_para,
+                "start_char": self.highlight_start_char,
+                "end_para": curr_p,
+                "end_char": end_char,
+                "text": raw_text,
+                "created_at": datetime.now().strftime("%d/%m/%Y %H:%M")
+            }
+            self.bookmarks.add_highlight(self.current_file, highlight_record)
+            self._refresh_permanent_highlights()
+
+            preview = (raw_text[:35] + "...") if len(raw_text) > 35 else raw_text
+            self.show_osd("✅ RESALTADO GUARDADO", f'"{preview}"', icon="🖍️", color="#eab308")
+
+    def delete_last_highlight(self):
+        """
+        Elimina el último fragmento resaltado (deshacer con botón RB del mando).
+        Si se estaba pintando activamente en ese instante, cancela la acción sin guardarla.
+        """
+        if self.is_highlighting_active:
+            self.is_highlighting_active = False
+            self.highlight_start_tk_idx = None
+            self.text_box._textbox.tag_remove("active_highlighting", "1.0", "end")
+            self.show_osd("RESALTADO CANCELADO", "Pintura cancelada sin guardar (RB)", icon="↩️", color="#f59e0b")
+            return
+
+        if not self.current_file:
+            return
+
+        removed = self.bookmarks.remove_last_highlight(self.current_file)
+        if removed:
+            self._refresh_permanent_highlights()
+            text_prev = removed.get("text", "")[:35]
+            if len(removed.get("text", "")) > 35:
+                text_prev += "..."
+            self.show_osd("🗑️ RESALTADO BORRADO", f'"{text_prev}" eliminado (RB)', icon="↩️", color="#ef4444")
+        else:
+            self.show_osd("SIN RESALTADOS", "No hay fragmentos resaltados para borrar", icon="ℹ️", color="#94a3b8")
+
+    def _refresh_permanent_highlights(self):
+        """Aplica los resaltados guardados en amarillo clarito sobre el texto."""
+        if not self.document or not self.current_file:
+            self._update_highlights_badge()
+            return
+
+        tb = self.text_box._textbox
+        tb.tag_remove("permanent_highlight", "1.0", "end")
+
+        highlights = self.bookmarks.get_highlights(self.current_file)
+        for h in highlights:
+            s_para = h.get("start_para", 0)
+            s_char = h.get("start_char", 0)
+            e_para = h.get("end_para", s_para)
+            e_char = h.get("end_char", s_char)
+
+            ranges_s = tb.tag_ranges(f"para_{s_para}")
+            ranges_e = tb.tag_ranges(f"para_{e_para}")
+
+            applied = False
+            if ranges_s and ranges_e:
+                try:
+                    tk_s = f"{ranges_s[0]} + {s_char} chars"
+                    tk_e = f"{ranges_e[0]} + {e_char} chars"
+                    if tb.compare(tk_s, "<", tk_e):
+                        tb.tag_add("permanent_highlight", tk_s, tk_e)
+                        applied = True
+                except Exception:
+                    applied = False
+
+            if not applied and h.get("text"):
+                fragment = h["text"].strip()
+                if fragment:
+                    pos = tb.search(fragment[:40], "1.0", "end")
+                    if pos:
+                        tb.tag_add("permanent_highlight", pos, f"{pos} + {len(fragment)} chars")
+
+        tb.tag_raise("permanent_highlight")
+        tb.tag_raise("active_highlighting")
+        self._update_highlights_badge()
+
+    def open_highlights_modal(self):
+        """
+        Abre el panel de gestión de citas y fragmentos resaltados del documento activo.
+        Permite revisar, saltar al texto, copiar al portapapeles y exportar a Markdown (.md).
+        """
+        modal = ctk.CTkToplevel(self.root)
+        modal.title("🖍️ Resaltados y Citas del Libro — Lector IA")
+        modal.geometry("820x600")
+        modal.minsize(740, 500)
+        modal.transient(self.root)
+        modal.grab_set()
+
+        header = ctk.CTkFrame(modal, fg_color="transparent")
+        header.pack(fill="x", padx=18, pady=(14, 6))
+
+        title_box = ctk.CTkFrame(header, fg_color="transparent")
+        title_box.pack(side="left")
+
+        ctk.CTkLabel(
+            title_box,
+            text="🖍️ Citas y Fragmentos Resaltados",
+            font=ctk.CTkFont(size=18, weight="bold")
+        ).pack(anchor="w")
+
+        book_name = os.path.basename(self.current_file) if self.current_file else "Ningún documento abierto"
+        ctk.CTkLabel(
+            title_box,
+            text=f"Libro: {book_name}",
+            font=ctk.CTkFont(size=11),
+            text_color="gray70"
+        ).pack(anchor="w")
+
+        header_actions = ctk.CTkFrame(header, fg_color="transparent")
+        header_actions.pack(side="right")
+
+        scroll_cards = ctk.CTkScrollableFrame(modal)
+        scroll_cards.pack(fill="both", expand=True, padx=18, pady=(8, 12))
+
+        def render_highlights():
+            for child in scroll_cards.winfo_children():
+                child.destroy()
+
+            if not self.current_file:
+                ctk.CTkLabel(
+                    scroll_cards,
+                    text="No hay ningún documento abierto.\nAbre un libro para ver o crear resaltados.",
+                    text_color="gray60",
+                    font=ctk.CTkFont(size=13)
+                ).pack(pady=50)
+                return
+
+            highlights = self.bookmarks.get_highlights(self.current_file)
+            if not highlights:
+                info_msg = (
+                    "No hay fragmentos resaltados en este documento todavía.\n\n"
+                    "💡 Cómo resaltar con el mando GameSir mientras escuchas:\n"
+                    "• Pulsa LB (Bumper Izquierdo) para empezar a pintar en amarillo mientras lee.\n"
+                    "• Pulsa LB de nuevo para terminar el resaltado y guardarlo.\n"
+                    "• Pulsa RB (Bumper Derecho) para deshacer o borrar el último resaltado.\n\n"
+                    "También puedes pulsar la tecla 'H' en tu teclado para resaltar."
+                )
+                ctk.CTkLabel(
+                    scroll_cards,
+                    text=info_msg,
+                    text_color="gray60",
+                    justify="left",
+                    font=ctk.CTkFont(size=12)
+                ).pack(pady=40, padx=20)
+                return
+
+            for idx, h in enumerate(reversed(highlights), 1):
+                card = ctk.CTkFrame(scroll_cards, corner_radius=8, fg_color="#1e293b")
+                card.pack(fill="x", pady=6, padx=2)
+
+                top_bar = ctk.CTkFrame(card, fg_color="transparent")
+                top_bar.pack(fill="x", padx=12, pady=(10, 4))
+
+                p_num = h.get("start_para", 0) + 1
+                created = h.get("created_at", "")
+                h_id = h.get("id", "")
+
+                lbl_tag = ctk.CTkLabel(
+                    top_bar,
+                    text=f" 🖍️ Cita #{len(highlights) - idx + 1} — Párrafo {p_num} ",
+                    fg_color="#854d0e",
+                    corner_radius=4,
+                    font=ctk.CTkFont(size=11, weight="bold"),
+                    text_color="#fef08a"
+                )
+                lbl_tag.pack(side="left")
+
+                if created:
+                    ctk.CTkLabel(
+                        top_bar,
+                        text=f"📅 {created}",
+                        font=ctk.CTkFont(size=11),
+                        text_color="gray60"
+                    ).pack(side="left", padx=(10, 0))
+
+                # Acciones individuales
+                btn_box = ctk.CTkFrame(top_bar, fg_color="transparent")
+                btn_box.pack(side="right")
+
+                def go_to_text(target_para=h.get("start_para", 0)):
+                    modal.destroy()
+                    self.player.play(target_para)
+                    self._highlight_paragraph(target_para)
+
+                btn_jump = ctk.CTkButton(
+                    btn_box,
+                    text="📖 Ir al Texto",
+                    width=90,
+                    height=26,
+                    fg_color="#0284c7",
+                    hover_color="#0369a1",
+                    font=ctk.CTkFont(size=11, weight="bold"),
+                    command=go_to_text
+                )
+                btn_jump.pack(side="left", padx=(0, 4))
+
+                def copy_quote(txt=h.get("text", "")):
+                    self.root.clipboard_clear()
+                    self.root.clipboard_append(txt)
+                    self.root.update()
+                    self.show_osd("COPIADO", "Texto copiado al portapapeles", icon="📋", color="#10b981")
+
+                btn_copy = ctk.CTkButton(
+                    btn_box,
+                    text="📋 Copiar",
+                    width=75,
+                    height=26,
+                    fg_color="gray25",
+                    hover_color="gray35",
+                    font=ctk.CTkFont(size=11),
+                    command=copy_quote
+                )
+                btn_copy.pack(side="left", padx=(0, 4))
+
+                def delete_quote(target_id=h_id):
+                    self.bookmarks.remove_highlight_by_id(self.current_file, target_id)
+                    self._refresh_permanent_highlights()
+                    render_highlights()
+                    self.show_osd("RESALTADO BORRADO", "Fragmento eliminado", icon="🗑️", color="#ef4444")
+
+                btn_del = ctk.CTkButton(
+                    btn_box,
+                    text="🗑️",
+                    width=35,
+                    height=26,
+                    fg_color="gray25",
+                    hover_color="#dc2626",
+                    text_color="#f87171",
+                    command=delete_quote
+                )
+                btn_del.pack(side="left")
+
+                # Cuerpo del texto resaltado
+                quote_box = ctk.CTkFrame(card, fg_color="#292524", corner_radius=6)
+                quote_box.pack(fill="x", padx=12, pady=(4, 10))
+
+                text_content = h.get("text", "").strip()
+                ctk.CTkLabel(
+                    quote_box,
+                    text=f'"{text_content}"',
+                    font=ctk.CTkFont(size=12, slant="italic"),
+                    text_color="#fef08a",
+                    justify="left",
+                    wraplength=730
+                ).pack(fill="x", padx=10, pady=8, anchor="w")
+
+        def export_to_markdown():
+            highlights = self.bookmarks.get_highlights(self.current_file) if self.current_file else []
+            if not highlights:
+                self.show_osd("SIN RESALTADOS", "No hay fragmentos para exportar", icon="ℹ️", color="#f59e0b")
+                return
+
+            clean_title = os.path.splitext(os.path.basename(self.current_file))[0]
+            default_dir = os.path.expanduser("~/Documentos")
+            os.makedirs(default_dir, exist_ok=True)
+
+            out_path = filedialog.asksaveasfilename(
+                parent=modal,
+                title="Exportar Resaltados a Markdown",
+                initialfile=f"{clean_title}_resaltados.md",
+                initialdir=default_dir,
+                defaultextension=".md",
+                filetypes=[("Markdown (*.md)", "*.md"), ("Todos los archivos", "*.*")]
+            )
+            if not out_path:
+                return
+
+            lines = [
+                f"# Resaltados y Notas: {clean_title}",
+                f"- **Archivo fuente:** `{self.current_file}`",
+                f"- **Fecha de exportación:** {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}",
+                f"- **Total de citas:** {len(highlights)}",
+                "",
+                "---",
+                ""
+            ]
+            for idx, h in enumerate(highlights, 1):
+                p_num = h.get("start_para", 0) + 1
+                created = h.get("created_at", "Sin fecha")
+                text = h.get("text", "").replace("\n", " ").strip()
+                lines.append(f"### {idx}. Párrafo {p_num} — *{created}*")
+                lines.append(f"> ❝ {text} ❞")
+                lines.append("")
+                lines.append("---")
+                lines.append("")
+
+            try:
+                with open(out_path, "w", encoding="utf-8") as f:
+                    f.write("\n".join(lines))
+                self.show_osd("EXPORTADO A MARKDOWN", f"Guardado en {os.path.basename(out_path)}", icon="📄", color="#10b981")
+            except Exception as e:
+                self.show_osd("ERROR EXPORTANDO", str(e)[:30], icon="⚠️", color="#ef4444")
+
+        btn_export = ctk.CTkButton(
+            header_actions,
+            text="📤 Exportar a Markdown (.md)",
+            width=190,
+            height=32,
+            fg_color="#0284c7",
+            hover_color="#0369a1",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            command=export_to_markdown
+        )
+        btn_export.pack(side="right")
+
+        def clear_all_highlights():
+            if not self.current_file or not self.bookmarks.get_highlights(self.current_file):
+                return
+            if self.current_file in self.bookmarks.library:
+                self.bookmarks.library[self.current_file]["highlights"] = []
+                self.bookmarks.save()
+            self._refresh_permanent_highlights()
+            render_highlights()
+            self.show_osd("RESALTADOS BORRADOS", "Se eliminaron todas las citas del libro", icon="🗑️", color="#ef4444")
+
+        btn_clear_all = ctk.CTkButton(
+            header_actions,
+            text="🗑️ Borrar Todos",
+            width=120,
+            height=32,
+            fg_color="#7f1d1d",
+            hover_color="#991b1b",
+            font=ctk.CTkFont(size=11),
+            command=clear_all_highlights
+        )
+        btn_clear_all.pack(side="right", padx=(0, 8))
+
+        render_highlights()
 
     # --------------------------------------------------------------------------
     # MODAL DE BIBLIOTECA

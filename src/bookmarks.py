@@ -48,6 +48,9 @@ class BookmarkManager:
         abs_path = os.path.abspath(file_path)
         percent = round((current_paragraph / max(total_paragraphs, 1)) * 100, 1)
 
+        existing_entry = self.library.get(abs_path, {})
+        existing_highlights = existing_entry.get("highlights", [])
+
         self.library[abs_path] = {
             "title": title,
             "path": abs_path,
@@ -55,8 +58,62 @@ class BookmarkManager:
             "total_paragraphs": total_paragraphs,
             "progress_percent": percent,
             "last_read": datetime.now().isoformat(),
+            "highlights": existing_highlights,
         }
         self.save()
+
+    def add_highlight(self, file_path: str, highlight: Dict[str, Any]):
+        """Agrega un fragmento resaltado al libro."""
+        if not file_path:
+            return
+        abs_path = os.path.abspath(file_path)
+        if abs_path not in self.library:
+            self.library[abs_path] = {
+                "title": os.path.basename(abs_path),
+                "path": abs_path,
+                "current_paragraph": 0,
+                "total_paragraphs": 1,
+                "progress_percent": 0.0,
+                "last_read": datetime.now().isoformat(),
+                "highlights": [],
+            }
+        if "highlights" not in self.library[abs_path]:
+            self.library[abs_path]["highlights"] = []
+        self.library[abs_path]["highlights"].append(highlight)
+        self.save()
+
+    def get_highlights(self, file_path: str) -> list:
+        """Obtiene la lista de resaltados de un documento."""
+        if not file_path:
+            return []
+        abs_path = os.path.abspath(file_path)
+        return self.library.get(abs_path, {}).get("highlights", [])
+
+    def remove_last_highlight(self, file_path: str) -> Optional[Dict[str, Any]]:
+        """Elimina el último fragmento resaltado (deshacer con RB)."""
+        if not file_path:
+            return None
+        abs_path = os.path.abspath(file_path)
+        if abs_path in self.library and self.library[abs_path].get("highlights"):
+            removed = self.library[abs_path]["highlights"].pop()
+            self.save()
+            return removed
+        return None
+
+    def remove_highlight_by_id(self, file_path: str, highlight_id: str) -> bool:
+        """Elimina un resaltado específico por su ID."""
+        if not file_path or not highlight_id:
+            return False
+        abs_path = os.path.abspath(file_path)
+        if abs_path in self.library and self.library[abs_path].get("highlights"):
+            before = len(self.library[abs_path]["highlights"])
+            self.library[abs_path]["highlights"] = [
+                h for h in self.library[abs_path]["highlights"] if h.get("id") != highlight_id
+            ]
+            if len(self.library[abs_path]["highlights"]) < before:
+                self.save()
+                return True
+        return False
 
     def get_recent_books(self, limit: int = 10):
         """Devuelve los libros más recientemente leídos ordenados por fecha."""

@@ -48,13 +48,13 @@ DEFAULT_JOYSTICK_MAP = {
     "btn_3": "NEXT_LINE",        # Y / Triángulo (Avanzar línea / 5s)
 
     # Bumpers y Triggers (L1, R1, L2, R2)
-    "btn_4": "PREV_PARAGRAPH",   # LB / L1 (Retroceder párrafo)
-    "btn_5": "NEXT_PARAGRAPH",   # RB / R1 (Avanzar párrafo)
-    "btn_6": "SPEED_DOWN",       # Back / Select (Reducir velocidad)
-    "btn_7": "PLAY_PAUSE",       # Start (Pausa / Reanudar)
-    "btn_8": "PLAY_PAUSE",       # Botón central / Logo GameSir / Mode
-    "btn_9": "PREV_PARAGRAPH",   # L3 (Stick izq)
-    "btn_10": "NEXT_PARAGRAPH",  # R3 (Stick der)
+    "btn_4": "TOGGLE_HIGHLIGHT",       # LB / L1 (Pintar / Dejar de pintar texto en amarillo)
+    "btn_5": "DELETE_LAST_HIGHLIGHT",  # RB / R1 (Borrar último resaltado)
+    "btn_6": "SPEED_DOWN",             # Back / Select (Reducir velocidad)
+    "btn_7": "PLAY_PAUSE",             # Start (Pausa / Reanudar)
+    "btn_8": "PLAY_PAUSE",             # Botón central / Logo GameSir / Mode
+    "btn_9": "PREV_PARAGRAPH",         # L3 (Stick izq)
+    "btn_10": "NEXT_PARAGRAPH",        # R3 (Stick der)
     "btn_11": "PLAY_PAUSE",
     "btn_12": "PLAY_PAUSE",
 
@@ -84,6 +84,8 @@ DEFAULT_JOYSTICK_MAP = {
 # Acciones disponibles para asignar a controles
 JOYSTICK_ACTIONS = {
     "PLAY_PAUSE": "⏯️ Pausar / Reanudar Lectura",
+    "TOGGLE_HIGHLIGHT": "🖍️ Resaltar / Dejar de pintar (Amarillo)",
+    "DELETE_LAST_HIGHLIGHT": "↩️ Borrar Último Resaltado",
     "PREV_PARAGRAPH": "⏮️ Párrafo Anterior",
     "NEXT_PARAGRAPH": "⏭️ Párrafo Siguiente",
     "PREV_LINE": "⏪ Retroceder Línea (-5s)",
